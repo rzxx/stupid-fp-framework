@@ -138,17 +138,13 @@ const OperationsProgram = Program.define("operations")
   })
   .resources({
     deployment: Resource.entity("Deployment", DeploymentId, function* (id) {
-      return yield* Deployments.find(id)
+      return yield* Deployments.find(id);
     }),
 
-    pendingDeployments: Resource.query(
-      "PendingDeployments",
-      TeamId,
-      function* (teamId) {
-        return yield* Deployments.pendingForTeam(teamId)
-      },
-    ),
-  })
+    pendingDeployments: Resource.query("PendingDeployments", TeamId, function* (teamId) {
+      return yield* Deployments.pendingForTeam(teamId);
+    }),
+  });
 ```
 
 The important idea is that resources are named and observable. They are part of the program model, not hidden fetch calls.
@@ -159,16 +155,16 @@ The important idea is that resources are named and observable. They are part of 
 const approveDeployment = Action.define("deployment.approve")
   .input({ deploymentId: DeploymentId })
   .run(function* ({ deploymentId }) {
-    const user = yield* Auth.currentUser
-    const deployment = yield* Deployments.find(deploymentId)
+    const user = yield* Auth.currentUser;
+    const deployment = yield* Deployments.find(deploymentId);
 
-    yield* Permissions.require(user, "deployment:approve", deployment.teamId)
-    yield* Deployments.approve(deploymentId, user.id)
-    yield* Audit.write("deployment.approved", { deploymentId, userId: user.id })
+    yield* Permissions.require(user, "deployment:approve", deployment.teamId);
+    yield* Deployments.approve(deploymentId, user.id);
+    yield* Audit.write("deployment.approved", { deploymentId, userId: user.id });
 
-    yield* Resource.invalidate(Deployment(deploymentId))
-    yield* Resource.invalidate(PendingDeployments(deployment.teamId))
-  })
+    yield* Resource.invalidate(Deployment(deploymentId));
+    yield* Resource.invalidate(PendingDeployments(deployment.teamId));
+  });
 ```
 
 This should feel closer to a workflow transaction than an API route.
@@ -195,7 +191,7 @@ const ApprovalSession = Session.define({
       tracePanel: state.tracePanel === "open" ? "closed" : "open",
     }),
   },
-})
+});
 ```
 
 This is conversational UI state. It is useful, but the system should not depend on it as the only copy of durable workflow truth.
@@ -212,12 +208,10 @@ const ApprovalScreen = Screen.define("/teams/:teamId/deployments")
     <DeploymentApprovalConsole
       deployments={pending}
       selectedDeployment={session.selectedDeployment}
-      onSelect={(deploymentId) =>
-        send({ type: "selectDeployment", deploymentId })}
-      onApprove={(deploymentId) =>
-        send(approveDeployment({ deploymentId }))}
+      onSelect={(deploymentId) => send({ type: "selectDeployment", deploymentId })}
+      onApprove={(deploymentId) => send(approveDeployment({ deploymentId }))}
     />
-  ))
+  ));
 ```
 
 The React component is ordinary UI. The surrounding model is not ordinary client-side fetching and mutation.
@@ -228,16 +222,16 @@ The React component is ordinary UI. The surrounding model is not ordinary client
 const startAgentRun = Action.define("agent.startRun")
   .input({ taskId: TaskId })
   .run(function* ({ taskId }) {
-    const user = yield* Auth.currentUser
+    const user = yield* Auth.currentUser;
 
-    yield* Permissions.require(user, "agent:start", taskId)
-    const runId = yield* AgentRuns.start(taskId, user.id)
+    yield* Permissions.require(user, "agent:start", taskId);
+    const runId = yield* AgentRuns.start(taskId, user.id);
 
-    yield* Resource.invalidate(AgentRun(runId))
-    yield* Stream.follow(AgentRun(runId))
+    yield* Resource.invalidate(AgentRun(runId));
+    yield* Stream.follow(AgentRun(runId));
 
-    return { runId }
-  })
+    return { runId };
+  });
 ```
 
 For an AI task control room, the action starts durable work and the stream follows its progress. The browser should not have to poll a custom endpoint and stitch together a separate client state machine.

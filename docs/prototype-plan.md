@@ -230,29 +230,27 @@ Use JSON envelopes. All envelopes must include a `type`. Envelopes related to a 
 ### Client To Server
 
 ```ts
-type ClientEnvelope =
-  | ConnectEnvelope
-  | ClientMessageEnvelope
+type ClientEnvelope = ConnectEnvelope | ClientMessageEnvelope;
 ```
 
 ```ts
 type ConnectEnvelope = {
-  type: "connect"
-  route: "/teams/:teamId/deployments"
-  params: { teamId: string }
-  resumeCursor?: string
-}
+  type: "connect";
+  route: "/teams/:teamId/deployments";
+  params: { teamId: string };
+  resumeCursor?: string;
+};
 ```
 
 ```ts
 type ClientMessageEnvelope = {
-  type: "message"
-  sessionId: string
+  type: "message";
+  sessionId: string;
   message:
     | { type: "session.selectDeployment"; deploymentId: string }
     | { type: "session.toggleTracePanel" }
-    | { type: "action.approveDeployment"; deploymentId: string }
-}
+    | { type: "action.approveDeployment"; deploymentId: string };
+};
 ```
 
 ### Server To Client
@@ -263,51 +261,51 @@ type ServerEnvelope =
   | ProjectionEnvelope
   | ActionResultEnvelope
   | TraceEnvelope
-  | ErrorEnvelope
+  | ErrorEnvelope;
 ```
 
 ```ts
 type ConnectedEnvelope = {
-  type: "connected"
-  sessionId: string
-}
+  type: "connected";
+  sessionId: string;
+};
 ```
 
 ```ts
 type ProjectionEnvelope = {
-  type: "projection:update"
-  sessionId: string
-  projectionVersion: number
-  projection: ApprovalProjection
-}
+  type: "projection:update";
+  sessionId: string;
+  projectionVersion: number;
+  projection: ApprovalProjection;
+};
 ```
 
 ```ts
 type ActionResultEnvelope = {
-  type: "action:result"
-  sessionId: string
-  traceId: string
-  action: "approveDeployment"
-  ok: boolean
-  error?: string
-}
+  type: "action:result";
+  sessionId: string;
+  traceId: string;
+  action: "approveDeployment";
+  ok: boolean;
+  error?: string;
+};
 ```
 
 ```ts
 type TraceEnvelope = {
-  type: "trace:update"
-  sessionId: string
-  trace: TraceSnapshot
-}
+  type: "trace:update";
+  sessionId: string;
+  trace: TraceSnapshot;
+};
 ```
 
 ```ts
 type ErrorEnvelope = {
-  type: "error"
-  sessionId?: string
-  traceId?: string
-  message: string
-}
+  type: "error";
+  sessionId?: string;
+  traceId?: string;
+  message: string;
+};
 ```
 
 ### First-Prototype Protocol Rules
@@ -326,47 +324,44 @@ Use in-memory data. Keep the model small but workflow-shaped.
 
 ```ts
 type Team = {
-  id: string
-  name: string
-}
+  id: string;
+  name: string;
+};
 ```
 
 ```ts
 type User = {
-  id: string
-  name: string
-  role: "approver" | "viewer"
-  teamIds: string[]
-}
+  id: string;
+  name: string;
+  role: "approver" | "viewer";
+  teamIds: string[];
+};
 ```
 
 ```ts
 type Deployment = {
-  id: string
-  teamId: string
-  service: string
-  version: string
-  environment: "staging" | "production"
-  status: "pending" | "approved" | "rejected"
-  requestedBy: string
-  requestedAt: string
-  approvedBy?: string
-  approvedAt?: string
-}
+  id: string;
+  teamId: string;
+  service: string;
+  version: string;
+  environment: "staging" | "production";
+  status: "pending" | "approved" | "rejected";
+  requestedBy: string;
+  requestedAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+};
 ```
 
 ```ts
 type AuditEntry = {
-  id: string
-  at: string
-  actorId: string
-  event:
-    | "deployment.approval_requested"
-    | "deployment.approved"
-    | "deployment.approval_denied"
-  deploymentId: string
-  detail: Record<string, unknown>
-}
+  id: string;
+  at: string;
+  actorId: string;
+  event: "deployment.approval_requested" | "deployment.approved" | "deployment.approval_denied";
+  deploymentId: string;
+  detail: Record<string, unknown>;
+};
 ```
 
 Initial seed:
@@ -383,9 +378,9 @@ Initial seed:
 Define these resources:
 
 ```ts
-PendingDeployments(teamId)
-Deployment(deploymentId)
-AuditTrail(deploymentId)
+PendingDeployments(teamId);
+Deployment(deploymentId);
+AuditTrail(deploymentId);
 ```
 
 First prototype behavior:
@@ -401,9 +396,9 @@ Session state:
 
 ```ts
 type ApprovalSessionState = {
-  selectedDeploymentId: string | null
-  tracePanelOpen: boolean
-}
+  selectedDeploymentId: string | null;
+  tracePanelOpen: boolean;
+};
 ```
 
 Session messages:
@@ -411,7 +406,7 @@ Session messages:
 ```ts
 type ApprovalSessionMessage =
   | { type: "session.selectDeployment"; deploymentId: string }
-  | { type: "session.toggleTracePanel" }
+  | { type: "session.toggleTracePanel" };
 ```
 
 Rules:
@@ -426,7 +421,7 @@ Rules:
 Implement one real action:
 
 ```ts
-approveDeployment({ deploymentId })
+approveDeployment({ deploymentId });
 ```
 
 Action flow:
@@ -461,41 +456,41 @@ The projection should be serializable JSON. React renders from this model.
 
 ```ts
 type ApprovalProjection = {
-  route: "/teams/:teamId/deployments"
-  team: { id: string; name: string }
-  currentUser: { id: string; name: string; role: "approver" | "viewer" }
-  pendingDeployments: DeploymentSummary[]
-  selectedDeployment: DeploymentDetail | null
-  tracePanelOpen: boolean
-  traces: TraceSummary[]
-}
+  route: "/teams/:teamId/deployments";
+  team: { id: string; name: string };
+  currentUser: { id: string; name: string; role: "approver" | "viewer" };
+  pendingDeployments: DeploymentSummary[];
+  selectedDeployment: DeploymentDetail | null;
+  tracePanelOpen: boolean;
+  traces: TraceSummary[];
+};
 ```
 
 ```ts
 type DeploymentSummary = {
-  id: string
-  service: string
-  version: string
-  environment: string
-  requestedBy: string
-  requestedAt: string
-}
+  id: string;
+  service: string;
+  version: string;
+  environment: string;
+  requestedBy: string;
+  requestedAt: string;
+};
 ```
 
 ```ts
 type DeploymentDetail = DeploymentSummary & {
-  status: "pending" | "approved" | "rejected"
-  auditTrail: AuditEntry[]
-}
+  status: "pending" | "approved" | "rejected";
+  auditTrail: AuditEntry[];
+};
 ```
 
 ```ts
 type TraceSummary = {
-  traceId: string
-  label: string
-  status: "running" | "success" | "error"
-  events: TraceEvent[]
-}
+  traceId: string;
+  label: string;
+  status: "running" | "success" | "error";
+  events: TraceEvent[];
+};
 ```
 
 ## Trace Model
@@ -504,7 +499,7 @@ Trace events should be structured and small.
 
 ```ts
 type TraceEvent = {
-  at: string
+  at: string;
   phase:
     | "message"
     | "session"
@@ -517,10 +512,10 @@ type TraceEvent = {
     | "resource"
     | "projection"
     | "stream"
-    | "error"
-  label: string
-  detail?: Record<string, unknown>
-}
+    | "error";
+  label: string;
+  detail?: Record<string, unknown>;
+};
 ```
 
 Minimum trace for successful approval:

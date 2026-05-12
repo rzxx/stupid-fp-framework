@@ -127,9 +127,9 @@ Resources represent durable or observable state:
 ```ts
 const Post = Resource.entity("Post", PostId, {
   read: Effect.fn(function* (id) {
-    return yield* Posts.find(id)
+    return yield* Posts.find(id);
   }),
-})
+});
 ```
 
 Actions are typed server transactions:
@@ -138,12 +138,12 @@ Actions are typed server transactions:
 const renamePost = Action.define("post.rename")
   .input({ id: PostId, title: NonEmptyString })
   .run(function* ({ id, title }) {
-    const user = yield* Auth.currentUser
+    const user = yield* Auth.currentUser;
 
-    yield* Permissions.require(user, "post:edit", id)
-    yield* Posts.rename(id, title)
-    yield* Resource.invalidate(Post(id))
-  })
+    yield* Permissions.require(user, "post:edit", id);
+    yield* Posts.rename(id, title);
+    yield* Resource.invalidate(Post(id));
+  });
 ```
 
 Screens observe resources and connect them to a session:
@@ -161,7 +161,7 @@ const PostScreen = Screen.define("/posts/:id")
       comments={comments}
       onRename={(title) => send(renamePost({ id: post.id, title }))}
     />
-  ))
+  ));
 ```
 
 Sessions own live per-tab conversational state:
@@ -174,7 +174,7 @@ const PostSession = Session.define({
     selectComment: (state, id) => ({ ...state, selectedComment: id }),
     openDraft: (state) => ({ ...state, draftOpen: true }),
   },
-})
+});
 ```
 
 This API shape is only illustrative. The important part is the model: resources are durable truth, sessions are live conversations, actions are effectful transactions, and React is the rendering surface.
