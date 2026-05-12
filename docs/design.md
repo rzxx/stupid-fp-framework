@@ -10,3 +10,5 @@ For the full design context, start with [docs/design/README.md](design/README.md
 - Read [developer-experience.md](design/developer-experience.md) when working on API shape, examples, and ergonomics.
 - Read [runtime.md](design/runtime.md) when working on the Bun host, stream, React adapter, RSC/Flight boundary, or architecture flow.
 - Read [experiments.md](design/experiments.md) when planning prototypes, scope, risks, and open questions.
+
+The first vertical-slice implementation boundary is locked in [docs/prototype-plan.md](prototype-plan.md).

@@ -368,9 +368,9 @@ If those answers are unclear, the next step should be more design work, not impl
 
 ## Next Planning Step
 
-The next useful artifact should be a first-prototype plan.
+The first-prototype plan now lives in [docs/prototype-plan.md](../prototype-plan.md).
 
-That plan should decide:
+That plan decides:
 
 - the smallest runtime package shape
 - the first workflow-shaped example
