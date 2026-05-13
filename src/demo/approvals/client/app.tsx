@@ -1,6 +1,6 @@
 import { createRoot, hydrateRoot } from "react-dom/client";
-import type { ProgramStreamBootstrap, TraceSnapshot } from "../framework";
-import type { ApprovalProjection } from "../demo/approvals/types";
+import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
+import type { ApprovalProjection } from "../types";
 import { ApprovalApp } from "./approval-app";
 
 declare global {

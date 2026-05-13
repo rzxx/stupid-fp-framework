@@ -1,4 +1,4 @@
-import type { JsonValue, ProjectionPatchEnvelope } from "../framework";
+import type { JsonValue, ProjectionPatchEnvelope } from "../../framework";
 
 export type RegionValuePatchHandlers<TProjection> = Record<
   string,

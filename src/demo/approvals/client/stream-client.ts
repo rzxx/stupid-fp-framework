@@ -4,11 +4,11 @@ import type {
   ProjectionEnvelope,
   ResumeResult,
   TraceEnvelope,
-} from "../framework";
-import type { ApprovalClientMessage, ApprovalProjection } from "../demo/approvals/types";
-import { connectProgramStream, type ConnectionState } from "./program-stream";
+} from "../../../framework";
+import type { ApprovalClientMessage, ApprovalProjection } from "../types";
+import { connectProgramStream, type ConnectionState } from "../../../adapters/react";
 
-export type { ConnectionState } from "./program-stream";
+export type { ConnectionState } from "../../../adapters/react";
 
 export type ApprovalStreamHandlers = {
   onConnectionState: (state: ConnectionState) => void;

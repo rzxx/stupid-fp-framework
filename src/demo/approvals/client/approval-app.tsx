@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
-import type { ProgramStreamBootstrap, TraceSnapshot } from "../framework";
-import type { ApprovalClientMessage, ApprovalProjection } from "../demo/approvals/types";
-import { applyRegionValuePatch } from "./projection-patch";
-import { useProgramStream, type ProgramStreamReactOptions } from "./react-adapter";
+import {
+  applyRegionValuePatch,
+  useProgramStream,
+  type ProgramStreamReactOptions,
+} from "../../../adapters/react";
+import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
+import type { ApprovalClientMessage, ApprovalProjection } from "../types";
 
 export function ApprovalApp(props: {
   bootstrap?: ProgramStreamBootstrap<ApprovalProjection, TraceSnapshot>;

@@ -3,7 +3,7 @@ import {
   connectProgramStream,
   type ConnectionState,
   type ProgramStreamSocket,
-} from "../src/client/program-stream";
+} from "../src/adapters/react/program-stream";
 import type { ProjectionPatchEnvelope, ResumeResult } from "../src/framework";
 
 type TestMessage = { type: "session.toggle" };

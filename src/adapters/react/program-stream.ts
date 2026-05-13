@@ -8,7 +8,7 @@ import type {
   ResumeResult,
   ServerEnvelope,
   TraceEnvelope,
-} from "../framework";
+} from "../../framework";
 
 export type ConnectionState = "connecting" | "open" | "closed" | "error";
 

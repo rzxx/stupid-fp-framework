@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyRegionValuePatch } from "../src/client/projection-patch";
+import { applyRegionValuePatch } from "../src/adapters/react/projection-patch";
 import type { ProjectionPatchEnvelope } from "../src/framework";
 
 describe("client projection patches", () => {
