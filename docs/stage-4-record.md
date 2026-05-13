@@ -36,6 +36,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Bun host plumbing lives behind `serveBunProgram`; the approval demo server now only wires app-specific files and runtime options.
 - React stream lifecycle now has a reusable `useProgramStream` hook; the approval app renders from that adapter instead of owning socket plumbing.
 - Trace events now have browser/dev visibility, and stream/projection readers expose browser-safe snapshots by default.
+- Programs now normalize a screen registry and route connections by declared screen route; single-screen programs retain the prototype fallback.
 
 ## Progress
 
@@ -47,6 +48,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Stage 6 done: extracted a Bun host adapter and shrank `src/server.ts` to demo configuration.
 - Stage 7 done: added a React adapter hook and moved approval UI stream state onto it.
 - Stage 8 done: added trace visibility policy and coverage for dev-only trace filtering.
+- Stage 9 done: added multi-screen registry/routing coverage without introducing file-router gravity.
 
 ## Skips
 

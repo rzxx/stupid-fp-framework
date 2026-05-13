@@ -63,8 +63,22 @@ export function createRuntime<
       };
     }
 
+    const screen = resolveScreen(session.route);
+
+    if (!screen) {
+      return {
+        envelopes: [
+          {
+            type: "error",
+            sessionId,
+            message: `No screen registered for route: ${session.route}`,
+          },
+        ],
+      };
+    }
+
     const observed = await program.resourceGraph.observe(() =>
-      program.screen.project(session, {
+      screen.project(session, {
         services: program.services,
         resources: program.resourceGraph,
         traces: traces.scoped(sessionId),
@@ -354,6 +368,12 @@ export function createRuntime<
       result: { status: "replayed", replayed: replay.length },
       replay: replay.map((entry) => entry.envelope),
     };
+  }
+
+  function resolveScreen(route: string) {
+    return (
+      program.screenByRoute.get(route) ?? (program.screens.length === 1 ? program.screens[0] : null)
+    );
   }
 }
 

@@ -82,6 +82,24 @@ describe("framework contract", () => {
     ]);
   });
 
+  test("programs can route connections to one of multiple registered screens", async () => {
+    const runtime = createMultiScreenRuntime();
+
+    const first = await runtime.connect({
+      type: "connect",
+      route: "/first",
+      params: {},
+    });
+    const second = await runtime.connect({
+      type: "connect",
+      route: "/second",
+      params: {},
+    });
+
+    expect(latestProjection(first.envelopes).projection.route).toBe("/first");
+    expect(latestProjection(second.envelopes).projection.route).toBe("/second");
+  });
+
   test("invalidated resources map back to observed projection regions", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
@@ -550,6 +568,44 @@ function createCounterRuntime(
   });
 
   return createRuntime(program, { store });
+}
+
+function createMultiScreenRuntime() {
+  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
+    services: createServices(),
+    resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
+    session: {
+      init: () => ({ selected: false }),
+      accepts: (message): message is SessionMessage =>
+        isMessage(message) && message.type === "session.toggle",
+      update: (state) => state,
+    },
+    screens: [
+      {
+        route: "/first",
+        project: async (session, context) => ({
+          route: session.route,
+          params: session.params,
+          selected: session.state.selected,
+          count: await context.resources.read(context.services, counterKey),
+          traceIds: [],
+        }),
+      },
+      {
+        route: "/second",
+        project: async (session, context) => ({
+          route: session.route,
+          params: session.params,
+          selected: session.state.selected,
+          count: await context.resources.read(context.services, counterKey),
+          traceIds: [],
+        }),
+      },
+    ],
+    actions: [],
+  });
+
+  return createRuntime(program);
 }
 
 async function connect(runtime: ReturnType<typeof createCounterRuntime>) {
