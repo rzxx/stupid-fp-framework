@@ -1,5 +1,7 @@
 import { executeAction } from "./action";
+import { Effect } from "./effect";
 import type { JsonValue } from "./json";
+import { actionHooks, resourceHooks, routeHooks, sessionHooks, traceHooks } from "./plugin";
 import { screenRouteDefinition, screenRoutePattern, type Program } from "./program";
 import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
@@ -54,6 +56,11 @@ export function createRuntime<
 ): Runtime<TSessionMessage, TActionMessage, TProjection> {
   const sessions = new SessionStore(program.session);
   const traces = new TraceStore();
+  const actionPluginHooks = actionHooks(program.plugins);
+  const resourcePluginHooks = resourceHooks(program.plugins);
+  const routePluginHooks = routeHooks(program.plugins);
+  const sessionPluginHooks = sessionHooks(program.plugins);
+  const tracePluginHooks = traceHooks(program.plugins);
   const store =
     options?.store ?? new MemoryRuntimeStore<TSessionState, TProjection, TraceSnapshot>();
 
@@ -197,7 +204,7 @@ export function createRuntime<
     },
 
     async connect(envelope) {
-      const resolved = resolveRoute(envelope.route, envelope.params);
+      const resolved = await resolveRoute(envelope.route, envelope.params);
       const connectRoute = resolved ?? {
         route: envelope.route,
         params: envelope.params,
@@ -208,6 +215,7 @@ export function createRuntime<
       const session = resume?.snapshot
         ? sessions.restore(resume.snapshot)
         : sessions.create(connectRoute.route, connectRoute.params);
+      await runSessionHooks(resume?.snapshot ? "restore" : "create", session);
       const connected: ServerEnvelope<TProjection, TraceSnapshot> = {
         type: "connected",
         sessionId: session.sessionId,
@@ -276,6 +284,7 @@ export function createRuntime<
         }
 
         sessions.update(session, envelope.message as TSessionMessage);
+        await runSessionUpdateHooks(session, envelope.message as TSessionMessage);
         traces.add(trace, "session", `${envelope.message.type} applied`);
         const projected = await patchSession(session.sessionId, trace);
         if (trace.status !== "error") {
@@ -293,6 +302,7 @@ export function createRuntime<
         program.runtime,
         traces,
         trace,
+        actionPluginHooks,
       );
 
       traces.add(trace, "resource", "resources invalidated", {
@@ -353,6 +363,7 @@ export function createRuntime<
     session: Session<TSessionState>,
     trace: TraceSnapshot,
   ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
+    await runTraceHooks(trace);
     const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
       type: "trace:update",
       sessionId: session.sessionId,
@@ -413,6 +424,7 @@ export function createRuntime<
     const affected = affectedRegions(sessions.list(), keys);
 
     program.resourceGraph.invalidate(keys);
+    await runResourceInvalidateHooks(keys);
 
     const envelopes: ServerEnvelope<TProjection, TraceSnapshot>[] = [];
 
@@ -549,17 +561,19 @@ export function createRuntime<
     );
   }
 
-  function resolveRoute(route: string, params: Record<string, string>) {
+  async function resolveRoute(route: string, params: Record<string, string>) {
     const exact = program.screenByRoute.get(route);
 
     if (exact) {
       const definition = screenRouteDefinition(exact);
       const matched = definition?.match(route, params);
 
-      return {
+      const resolved = {
         route: screenRoutePattern(exact),
         params: matched?.params ?? params,
       };
+      await runRouteHooks(route, params, resolved.route);
+      return resolved;
     }
 
     for (const screen of program.screens) {
@@ -567,11 +581,64 @@ export function createRuntime<
       const matched = definition?.match(route, params);
 
       if (matched) {
+        await runRouteHooks(route, params, matched.route);
         return matched;
       }
     }
 
+    await runRouteHooks(route, params, null);
     return null;
+  }
+
+  async function runRouteHooks(
+    route: string,
+    params: Record<string, string>,
+    matchedRoute: string | null,
+  ): Promise<void> {
+    await program.runtime.runPromise(
+      Effect.forEach(
+        routePluginHooks,
+        (hook) => hook.resolve?.({ route, params, matchedRoute }) ?? Effect.void,
+      ),
+    );
+  }
+
+  async function runSessionHooks(kind: "create" | "restore", session: Session<TSessionState>) {
+    await program.runtime.runPromise(
+      Effect.forEach(
+        sessionPluginHooks,
+        (hook) => hook[kind]?.({ session: session as Session<unknown> }) ?? Effect.void,
+      ),
+    );
+  }
+
+  async function runSessionUpdateHooks(
+    session: Session<TSessionState>,
+    message: TSessionMessage,
+  ): Promise<void> {
+    await program.runtime.runPromise(
+      Effect.forEach(
+        sessionPluginHooks,
+        (hook) => hook.update?.({ session: session as Session<unknown>, message }) ?? Effect.void,
+      ),
+    );
+  }
+
+  async function runResourceInvalidateHooks(keys: readonly ResourceKey[]): Promise<void> {
+    await program.runtime.runPromise(
+      Effect.forEach(
+        resourcePluginHooks,
+        (hook) => hook.invalidate?.({ keys: keys.map(serializeResourceKey) }) ?? Effect.void,
+      ),
+    );
+  }
+
+  async function runTraceHooks(trace: TraceSnapshot): Promise<void> {
+    await program.runtime.runPromise(
+      Effect.forEach(trace.events, (event) =>
+        Effect.forEach(tracePluginHooks, (hook) => hook.event?.({ trace, event }) ?? Effect.void),
+      ),
+    );
   }
 }
 

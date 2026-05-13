@@ -2,6 +2,7 @@ export * from "./action";
 export * from "./bun-host";
 export * from "./effect";
 export * from "./json";
+export * from "./plugin";
 export * from "./program";
 export * from "./projection";
 export * from "./resource";

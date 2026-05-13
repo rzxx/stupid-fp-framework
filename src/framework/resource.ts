@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Effect } from "./effect";
 import type { JsonValue } from "./json";
 import type { ProjectionRegionSnapshot } from "./projection";
+import type { ResourceHooks } from "./plugin";
 
 export type ResourceKey<TValue = unknown> = {
   readonly type: string;
@@ -82,6 +83,11 @@ export class ResourceGraph<R> {
   readonly #definitions = new Map<string, ResourceDefinition<R, unknown>>();
   readonly #cache = new Map<string, ResourceSnapshot>();
   readonly #observerStorage = new AsyncLocalStorage<ResourceObservationScope>();
+  readonly #hooks: ResourceHooks<R>[];
+
+  constructor(hooks: ResourceHooks<R>[] = []) {
+    this.#hooks = hooks;
+  }
 
   register<TValue>(definition: ResourceDefinition<R, TValue>): void {
     this.#definitions.set(definition.type, definition as ResourceDefinition<R, unknown>);
@@ -94,7 +100,13 @@ export class ResourceGraph<R> {
     const cached = this.#cache.get(id);
 
     if (cached) {
-      return Effect.succeed(cached.value as TValue);
+      return Effect.as(
+        Effect.forEach(
+          this.#hooks,
+          (hook) => hook.afterRead?.({ key: serializeResourceKey(key) }) ?? Effect.void,
+        ),
+        cached.value as TValue,
+      );
     }
 
     const definition = this.#definitions.get(key.type);
@@ -105,21 +117,44 @@ export class ResourceGraph<R> {
       );
     }
 
-    return Effect.flatMap(
-      Effect.try({
-        try: () => definition.load(key) as Effect.Effect<TValue, ResourceFailure, R>,
-        catch: (error) =>
-          resourceFailure(
-            key.type,
-            error instanceof Error ? error.message : "Resource loader failed",
-            key.id,
-          ),
-      }),
-      (effect) =>
-        Effect.tap(effect, (value) =>
+    const read = Effect.flatMap(
+      Effect.forEach(
+        this.#hooks,
+        (hook) => hook.beforeRead?.({ key: serializeResourceKey(key) }) ?? Effect.void,
+      ),
+      () =>
+        Effect.flatMap(
+          Effect.try({
+            try: () => definition.load(key) as Effect.Effect<TValue, ResourceFailure, R>,
+            catch: (error) =>
+              resourceFailure(
+                key.type,
+                error instanceof Error ? error.message : "Resource loader failed",
+                key.id,
+              ),
+          }),
+          (effect) => effect,
+        ),
+    );
+
+    return Effect.tapError(
+      Effect.tap(read, (value) =>
+        Effect.zipRight(
           Effect.sync(() => {
             this.#cache.set(id, { key, value });
           }),
+          Effect.forEach(
+            this.#hooks,
+            (hook) => hook.afterRead?.({ key: serializeResourceKey(key) }) ?? Effect.void,
+          ),
+        ),
+      ),
+      (failure) =>
+        Effect.forEach(
+          this.#hooks,
+          (hook) =>
+            hook.failure?.({ key: serializeResourceKey(key), error: failure.message }) ??
+            Effect.void,
         ),
     );
   }

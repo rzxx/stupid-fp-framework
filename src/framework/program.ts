@@ -1,6 +1,7 @@
 import type { ActionDefinition } from "./action";
 import { Layer, ManagedRuntime } from "./effect";
 import type { JsonValue } from "./json";
+import { resourceHooks, type FrameworkPlugin } from "./plugin";
 import { ResourceGraph, type ResourceDefinition } from "./resource";
 import type { ScreenDefinition } from "./projection";
 import type { RouteDefinition } from "./route";
@@ -14,6 +15,7 @@ export type ProgramDefinition<
   TProjection,
 > = {
   layer?: Layer.Layer<R>;
+  plugins?: FrameworkPlugin<R>[];
   resources: ResourceDefinition<R, unknown>[];
   session: SessionDefinition<TSessionState, TSessionMessage>;
   screen?: ScreenDefinition<R, TSessionState, TProjection>;
@@ -30,6 +32,7 @@ export type Program<
 > = ProgramDefinition<R, TSessionState, TSessionMessage, TActionMessage, TProjection> & {
   layer: Layer.Layer<R>;
   runtime: ManagedRuntime.ManagedRuntime<R, never>;
+  plugins: FrameworkPlugin<R>[];
   resourceGraph: ResourceGraph<R>;
   actionByType: Map<string, ActionDefinition<R, TActionMessage, JsonValue | void>>;
   screens: ScreenDefinition<R, TSessionState, TProjection>[];
@@ -46,7 +49,8 @@ export function defineProgram<
 >(
   definition: ProgramDefinition<R, TSessionState, TSessionMessage, TActionMessage, TProjection>,
 ): Program<R, TSessionState, TSessionMessage, TActionMessage, TProjection> {
-  const resourceGraph = new ResourceGraph<R>();
+  const plugins = definition.plugins ?? [];
+  const resourceGraph = new ResourceGraph<R>(resourceHooks(plugins));
   const screens = normalizeScreens(definition);
   const layer = definition.layer ?? (Layer.empty as Layer.Layer<R>);
 
@@ -57,6 +61,7 @@ export function defineProgram<
   return {
     ...definition,
     layer,
+    plugins,
     runtime: ManagedRuntime.make(layer),
     screens,
     screenByRoute: new Map(screens.map((screen) => [screenRoutePattern(screen), screen])),

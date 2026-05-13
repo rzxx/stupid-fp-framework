@@ -20,6 +20,7 @@ import {
   Session,
   type ProjectionEnvelope,
   type ProjectionPatchEnvelope,
+  type FrameworkPlugin,
   type RuntimeStore,
   type ServerEnvelope,
   type TraceEnvelope,
@@ -324,6 +325,79 @@ describe("framework contract", () => {
         }),
       ]),
     );
+  });
+
+  test("plugins can observe actions resources sessions routes and traces", async () => {
+    const observed: string[] = [];
+    const plugin: FrameworkPlugin<TestEnvironment> = {
+      name: "contract-observer",
+      hooks: {
+        action: {
+          before: ({ actionType }) =>
+            Effect.sync(() => {
+              observed.push(`action:before:${actionType}`);
+            }),
+          after: ({ actionType, ok }) =>
+            Effect.sync(() => {
+              observed.push(`action:after:${actionType}:${ok}`);
+            }),
+        },
+        resource: {
+          beforeRead: ({ key }) =>
+            Effect.sync(() => {
+              observed.push(`resource:read:${key.label}`);
+            }),
+          invalidate: ({ keys }) =>
+            Effect.sync(() => {
+              observed.push(`resource:invalidate:${keys.map((key) => key.label).join(",")}`);
+            }),
+        },
+        route: {
+          resolve: ({ matchedRoute }) =>
+            Effect.sync(() => {
+              observed.push(`route:${matchedRoute ?? "none"}`);
+            }),
+        },
+        session: {
+          create: ({ session }) =>
+            Effect.sync(() => {
+              observed.push(`session:create:${session.sessionId}`);
+            }),
+          update: ({ message }) =>
+            Effect.sync(() => {
+              observed.push(`session:update:${message.type}`);
+            }),
+        },
+        trace: {
+          event: ({ event }) =>
+            Effect.sync(() => {
+              observed.push(`trace:${event.label}`);
+            }),
+        },
+      },
+    };
+    const runtime = createCounterRuntime(createServices(), undefined, [plugin]);
+    const connected = await connectWithEnvelope(runtime);
+
+    await runtime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+    await runtime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "action.increment", amount: 1 },
+    });
+
+    expect(observed).toContain("route:/contract/:id");
+    expect(observed).toContain("session:create:session-1");
+    expect(observed).toContain("session:update:session.toggle");
+    expect(observed).toContain("action:before:action.increment");
+    expect(observed).toContain("action:after:action.increment:true");
+    expect(observed).toContain("resource:read:Counter(main)");
+    expect(observed).toContain("resource:invalidate:Counter(main)");
+    expect(observed).toContain("trace:message received");
   });
 
   test("failed actions report errors and do not mutate durable resources", async () => {
@@ -694,6 +768,7 @@ function createServicesLayer(services: Services): Layer.Layer<TestEnvironment> {
 function createCounterRuntime(
   services = createServices(),
   store?: RuntimeStore<SessionState, Projection>,
+  plugins: FrameworkPlugin<TestEnvironment>[] = [],
 ) {
   const program = defineProgram<
     TestEnvironment,
@@ -703,6 +778,7 @@ function createCounterRuntime(
     Projection
   >({
     layer: createServicesLayer(services),
+    plugins,
     resources: [
       defineResource<TestEnvironment, number>("Counter", () =>
         Effect.map(CounterService, (counter) => counter.value),

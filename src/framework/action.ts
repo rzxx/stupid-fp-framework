@@ -1,5 +1,6 @@
 import { Effect, type ManagedRuntime } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
+import type { ActionHooks } from "./plugin";
 import type { ResourceKey } from "./resource";
 import { acceptsSchema, type FrameworkSchema } from "./schema";
 import type { TraceSnapshot, TraceStore } from "./trace";
@@ -78,6 +79,7 @@ export async function executeAction<R, TMessage extends { type: string }>(
   runtime: ManagedRuntime.ManagedRuntime<R, never>,
   traces: TraceStore,
   trace: TraceSnapshot,
+  hooks: ActionHooks<R>[] = [],
 ): Promise<ActionExecution> {
   const invalidated: ResourceKey[] = [];
   const context: ActionContext = {
@@ -100,13 +102,60 @@ export async function executeAction<R, TMessage extends { type: string }>(
     return { ok: false, error, invalidated };
   }
 
+  const actionMessage = message as { type: string };
+
+  await runtime.runPromise(
+    Effect.forEach(
+      hooks,
+      (hook) =>
+        hook.before?.({ actionType: action.type, message: actionMessage, trace }) ?? Effect.void,
+    ),
+  );
+
   const result = await runtime.runPromise(Effect.either(action.run(message, context)));
 
   if (result._tag === "Left") {
     const message = result.left.message;
     traces.fail(trace, message);
+    await runtime.runPromise(
+      Effect.forEach(
+        hooks,
+        (hook) =>
+          hook.failure?.({
+            actionType: action.type,
+            message: actionMessage,
+            trace,
+            error: message,
+          }) ?? Effect.void,
+      ),
+    );
+    await runtime.runPromise(
+      Effect.forEach(
+        hooks,
+        (hook) =>
+          hook.after?.({
+            actionType: action.type,
+            message: actionMessage,
+            trace,
+            ok: false,
+          }) ?? Effect.void,
+      ),
+    );
     return { ok: false, error: message, invalidated };
   }
+
+  await runtime.runPromise(
+    Effect.forEach(
+      hooks,
+      (hook) =>
+        hook.after?.({
+          actionType: action.type,
+          message: actionMessage,
+          trace,
+          ok: true,
+        }) ?? Effect.void,
+    ),
+  );
 
   return {
     ok: true,
