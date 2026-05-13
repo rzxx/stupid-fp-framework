@@ -23,6 +23,7 @@ export type RuntimeStore<TSessionState, TProjection, TTrace = TraceSnapshot> = {
     sessionId: string,
     cursor: string,
   ) => Promise<StoredEnvelope<TProjection, TTrace>[]>;
+  hasEnvelopeCursor: (sessionId: string, cursor: string) => Promise<boolean>;
 };
 
 type StoredState<TSessionState, TProjection, TTrace> = {
@@ -77,6 +78,12 @@ export class MemoryRuntimeStore<
       .slice(index + 1)
       .filter((entry) => entry.sessionId === sessionId)
       .map((entry) => ({ ...entry }));
+  }
+
+  async hasEnvelopeCursor(sessionId: string, cursor: string): Promise<boolean> {
+    return this.#envelopes.some(
+      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
+    );
   }
 }
 
@@ -134,6 +141,13 @@ export class JsonFileRuntimeStore<
     }
 
     return state.envelopes.slice(index + 1).filter((entry) => entry.sessionId === sessionId);
+  }
+
+  async hasEnvelopeCursor(sessionId: string, cursor: string): Promise<boolean> {
+    const state = await this.#read();
+    return state.envelopes.some(
+      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
+    );
   }
 
   async #read(): Promise<StoredState<TSessionState, TProjection, TTrace>> {

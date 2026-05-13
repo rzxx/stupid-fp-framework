@@ -29,7 +29,9 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Whole projections remain the fallback, but region metadata must start affecting runtime output.
 - `JsonFileRuntimeStore` remains a dev/test adapter, not the app persistence model.
 - React integration should become an adapter surface without introducing client cache ownership.
+- Resume now keeps the old `resumed` boolean for client compatibility, but the durable semantic field is `connected.resume`.
 
 ## Progress
 
 - Stage 1 done: restored formatting hygiene, confirmed `bun test` and `bun run check` pass.
+- Stage 2 done: added explicit resume statuses, cursor-history replay, stale-cursor refresh, route-mismatch rejection, and contract tests.

@@ -219,6 +219,107 @@ describe("framework contract", () => {
     await assertStoreEnvelopeHistory(file);
   });
 
+  test("resume with missed envelopes replays history instead of recomputing immediately", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const firstRuntime = createCounterRuntime(services, store);
+    const connected = await connect(firstRuntime);
+
+    const updated = await firstRuntime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+    const earlierCursor = latestProjection(updated.envelopes).cursor;
+
+    await firstRuntime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+
+    const resumedRuntime = createCounterRuntime(services, store);
+    const resumed = await resumedRuntime.connect({
+      type: "connect",
+      route: "/contract/:id",
+      params: { id: "main" },
+      resume: {
+        sessionId: connected.sessionId,
+        cursor: earlierCursor,
+      },
+    });
+
+    expect(resumed.envelopes[0]).toMatchObject({
+      type: "connected",
+      resumed: true,
+      resume: { status: "replayed" },
+    });
+    expect(resumed.envelopes.some((envelope) => envelope.type === "trace:update")).toBe(true);
+  });
+
+  test("resume with route mismatch creates a fresh session with an explicit rejection", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const firstRuntime = createCounterRuntime(services, store);
+    const connected = await connect(firstRuntime);
+
+    const updated = await firstRuntime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+    const resumeCursor = latestTrace(updated.envelopes).cursor;
+
+    const resumedRuntime = createCounterRuntime(services, store);
+    const resumed = await resumedRuntime.connect({
+      type: "connect",
+      route: "/different/:id",
+      params: { id: "main" },
+      resume: {
+        sessionId: connected.sessionId,
+        cursor: resumeCursor,
+      },
+    });
+
+    expect(resumed.envelopes[0]).toMatchObject({
+      type: "connected",
+      resumed: false,
+      resume: { status: "rejected", reason: "route-mismatch" },
+    });
+    expect(latestProjection(resumed.envelopes).projection.selected).toBe(false);
+  });
+
+  test("resume with stale cursor restores session and refreshes projection", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const firstRuntime = createCounterRuntime(services, store);
+    const connected = await connect(firstRuntime);
+
+    await firstRuntime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+
+    const resumedRuntime = createCounterRuntime(services, store);
+    const resumed = await resumedRuntime.connect({
+      type: "connect",
+      route: "/contract/:id",
+      params: { id: "main" },
+      resume: {
+        sessionId: connected.sessionId,
+        cursor: "cursor-missing",
+      },
+    });
+
+    expect(resumed.envelopes[0]).toMatchObject({
+      type: "connected",
+      resumed: true,
+      resume: { status: "refreshed", reason: "stale-cursor" },
+    });
+    expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
+  });
+
   test("stream parser rejects params that are not string records", () => {
     expect(
       parseClientEnvelope(
@@ -359,6 +460,7 @@ async function assertResumeRestoresSession(store: RuntimeStore<SessionState, Pro
     type: "connected",
     sessionId: connected.sessionId,
     resumed: true,
+    resume: { status: "refreshed", reason: "current-cursor" },
   });
   expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
 }
@@ -370,6 +472,7 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Proj
     sessionId: "session-x",
     cursor: firstCursor,
     resumed: false,
+    resume: { status: "fresh" },
   });
 
   const secondCursor = await store.nextCursor();

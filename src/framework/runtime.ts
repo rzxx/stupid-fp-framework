@@ -3,8 +3,8 @@ import type { Program } from "./program";
 import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
 import { MemoryRuntimeStore, type RuntimeStore } from "./store";
-import { type ClientEnvelope, type ServerEnvelope } from "./stream";
-import { SessionStore, type Session } from "./session";
+import { type ClientEnvelope, type ResumeResult, type ServerEnvelope } from "./stream";
+import { SessionStore, type Session, type SessionSnapshot } from "./session";
 import { TraceStore, type TraceSnapshot } from "./trace";
 
 export type RuntimeResult<TProjection> = {
@@ -113,17 +113,27 @@ export function createRuntime<
     },
 
     async connect(envelope) {
-      const restored = envelope.resume ? await store.loadSession(envelope.resume.sessionId) : null;
-      const session = restored
-        ? sessions.restore(restored)
+      const resume = envelope.resume
+        ? await resolveResume(envelope.route, envelope.params, envelope.resume)
+        : null;
+      const session = resume?.snapshot
+        ? sessions.restore(resume.snapshot)
         : sessions.create(envelope.route, envelope.params);
       const connected: ServerEnvelope<TProjection, TraceSnapshot> = {
         type: "connected",
         sessionId: session.sessionId,
         cursor: "",
-        resumed: Boolean(restored),
+        resumed: Boolean(resume?.snapshot),
+        resume: resume?.result ?? { status: "fresh" },
       };
       await persistEnvelope(session, connected);
+
+      if (resume?.replay) {
+        return {
+          envelopes: [connected, ...resume.replay],
+        };
+      }
+
       const initial = await project(session.sessionId);
 
       return {
@@ -234,6 +244,61 @@ export function createRuntime<
     await persistEnvelope(session, envelope);
     return envelope;
   }
+
+  async function resolveResume(
+    route: string,
+    params: Record<string, string>,
+    resume: { sessionId: string; cursor: string },
+  ): Promise<{
+    snapshot?: SessionSnapshot<TSessionState>;
+    result: ResumeResult;
+    replay?: ServerEnvelope<TProjection, TraceSnapshot>[];
+  }> {
+    const snapshot = await store.loadSession(resume.sessionId);
+
+    if (!snapshot) {
+      return { result: { status: "rejected", reason: "missing-session" } };
+    }
+
+    if (snapshot.route !== route || !sameParams(snapshot.params, params)) {
+      return { result: { status: "rejected", reason: "route-mismatch" } };
+    }
+
+    const cursorExists = await store.hasEnvelopeCursor(resume.sessionId, resume.cursor);
+
+    if (!cursorExists) {
+      return {
+        snapshot,
+        result: { status: "refreshed", reason: "stale-cursor" },
+      };
+    }
+
+    const replay = await store.readEnvelopesAfter(resume.sessionId, resume.cursor);
+
+    if (replay.length === 0) {
+      return {
+        snapshot,
+        result: { status: "refreshed", reason: "current-cursor" },
+      };
+    }
+
+    return {
+      snapshot,
+      result: { status: "replayed", replayed: replay.length },
+      replay: replay.map((entry) => entry.envelope),
+    };
+  }
+}
+
+function sameParams(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  return leftKeys.every((key) => left[key] === right[key]);
 }
 
 function affectedRegions(

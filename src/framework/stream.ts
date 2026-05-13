@@ -21,7 +21,25 @@ export type ConnectedEnvelope = {
   sessionId: string;
   cursor: string;
   resumed: boolean;
+  resume: ResumeResult;
 };
+
+export type ResumeResult =
+  | {
+      status: "fresh";
+    }
+  | {
+      status: "rejected";
+      reason: "missing-session" | "route-mismatch";
+    }
+  | {
+      status: "refreshed";
+      reason: "current-cursor" | "stale-cursor";
+    }
+  | {
+      status: "replayed";
+      replayed: number;
+    };
 
 export type ProjectionEnvelope<TProjection> = {
   type: "projection:update";
