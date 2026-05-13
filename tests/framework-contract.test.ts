@@ -209,6 +209,16 @@ describe("framework contract", () => {
     await assertResumeRestoresSession(store);
   });
 
+  test("runtime stores expose envelope history after a cursor", async () => {
+    const memory = new MemoryRuntimeStore<SessionState, Projection>();
+    const file = new JsonFileRuntimeStore<SessionState, Projection>(
+      join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
+    );
+
+    await assertStoreEnvelopeHistory(memory);
+    await assertStoreEnvelopeHistory(file);
+  });
+
   test("stream parser rejects params that are not string records", () => {
     expect(
       parseClientEnvelope(
@@ -351,4 +361,38 @@ async function assertResumeRestoresSession(store: RuntimeStore<SessionState, Pro
     resumed: true,
   });
   expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
+}
+
+async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Projection>) {
+  const firstCursor = await store.nextCursor();
+  await store.appendEnvelope("session-x", firstCursor, {
+    type: "connected",
+    sessionId: "session-x",
+    cursor: firstCursor,
+    resumed: false,
+  });
+
+  const secondCursor = await store.nextCursor();
+  await store.appendEnvelope("session-x", secondCursor, {
+    type: "projection:update",
+    sessionId: "session-x",
+    cursor: secondCursor,
+    projectionVersion: 1,
+    projection: {
+      route: "/contract/:id",
+      params: { id: "main" },
+      selected: false,
+      count: 0,
+      traceIds: [],
+    },
+    regions: [],
+  });
+
+  expect(await store.readEnvelopesAfter("session-x", firstCursor)).toMatchObject([
+    {
+      sessionId: "session-x",
+      cursor: secondCursor,
+      envelope: { type: "projection:update" },
+    },
+  ]);
 }
