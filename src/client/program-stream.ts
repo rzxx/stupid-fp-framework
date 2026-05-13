@@ -2,6 +2,7 @@ import type {
   ActionResultEnvelope,
   ClientEnvelope,
   ErrorEnvelope,
+  ProjectionPatchEnvelope,
   ProjectionEnvelope,
   ServerEnvelope,
   TraceEnvelope,
@@ -13,6 +14,7 @@ export type ProgramStreamHandlers<TProjection, TTrace> = {
   onConnectionState: (state: ConnectionState) => void;
   onSession: (sessionId: string, resumed: boolean) => void;
   onProjection: (envelope: ProjectionEnvelope<TProjection>) => void;
+  onPatch?: (envelope: ProjectionPatchEnvelope) => void;
   onTrace: (envelope: TraceEnvelope<TTrace>) => void;
   onActionResult: (envelope: ActionResultEnvelope) => void;
   onError: (envelope: ErrorEnvelope) => void;
@@ -75,6 +77,11 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
 
     if (envelope.type === "projection:update") {
       options.handlers.onProjection(envelope);
+      return;
+    }
+
+    if (envelope.type === "projection:patch") {
+      options.handlers.onPatch?.(envelope);
       return;
     }
 

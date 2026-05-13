@@ -29,6 +29,7 @@ export type Runtime<
   ) => Promise<RuntimeResult<TProjection>>;
   traces: TraceStore;
   affectedRegions: (keys: readonly ResourceKey[]) => AffectedRegion[];
+  invalidate: (keys: readonly ResourceKey[]) => Promise<RuntimeResult<TProjection>>;
 };
 
 export type RuntimeOptions<TSessionState, TProjection> = {
@@ -110,6 +111,9 @@ export function createRuntime<
     traces,
     affectedRegions(keys) {
       return affectedRegions(sessions.list(), keys);
+    },
+    async invalidate(keys) {
+      return refreshAffectedSessions(keys);
     },
 
     async connect(envelope) {
@@ -199,8 +203,6 @@ export function createRuntime<
         trace,
       );
 
-      program.resourceGraph.invalidate(result.invalidated);
-
       traces.add(trace, "resource", "resources invalidated", {
         resources: result.invalidated.map((key) => serializeResourceKey(key).label),
       });
@@ -215,7 +217,13 @@ export function createRuntime<
         result: result.result,
       };
       await persistEnvelope(session, actionResult);
-      const projected = await project(session.sessionId, trace);
+      const projected =
+        result.ok && result.invalidated.length > 0
+          ? ownSessionResult(
+              await refreshAffectedSessions(result.invalidated, trace),
+              session.sessionId,
+            )
+          : await project(session.sessionId, trace);
 
       if (result.ok) {
         traces.complete(trace);
@@ -235,6 +243,7 @@ export function createRuntime<
 
     if (
       envelope.type === "connected" ||
+      envelope.type === "projection:patch" ||
       envelope.type === "projection:update" ||
       envelope.type === "action:result" ||
       envelope.type === "trace:update"
@@ -259,6 +268,48 @@ export function createRuntime<
     };
     await persistEnvelope(session, envelope);
     return envelope;
+  }
+
+  async function refreshAffectedSessions(
+    keys: readonly ResourceKey[],
+    trace?: TraceSnapshot,
+  ): Promise<RuntimeResult<TProjection>> {
+    const affected = affectedRegions(sessions.list(), keys);
+
+    program.resourceGraph.invalidate(keys);
+
+    const envelopes: ServerEnvelope<TProjection, TraceSnapshot>[] = [];
+
+    for (const affectedSession of affected) {
+      if (trace) {
+        traces.add(trace, "projection", "regions invalidated", {
+          sessionId: affectedSession.sessionId,
+          regions: affectedSession.regions.map((region) => region.id),
+        });
+      }
+
+      const patch: ServerEnvelope<TProjection, TraceSnapshot> = {
+        type: "projection:patch",
+        sessionId: affectedSession.sessionId,
+        cursor: "",
+        patch: {
+          kind: "regions-invalidated",
+          regions: affectedSession.regions,
+        },
+        causedByTraceId: trace?.traceId,
+      };
+      const session = sessions.get(affectedSession.sessionId);
+
+      if (!session) {
+        continue;
+      }
+
+      await persistEnvelope(session, patch);
+      envelopes.push(patch);
+      envelopes.push(...(await project(affectedSession.sessionId, trace)).envelopes);
+    }
+
+    return { envelopes };
   }
 
   async function resolveResume(
@@ -304,6 +355,15 @@ export function createRuntime<
       replay: replay.map((entry) => entry.envelope),
     };
   }
+}
+
+function ownSessionResult<TProjection>(
+  result: RuntimeResult<TProjection>,
+  sessionId: string,
+): RuntimeResult<TProjection> {
+  return {
+    envelopes: result.envelopes.filter((envelope) => envelope.sessionId === sessionId),
+  };
 }
 
 function sameParams(left: Record<string, string>, right: Record<string, string>): boolean {

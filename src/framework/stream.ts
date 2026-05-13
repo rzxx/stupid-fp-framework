@@ -60,6 +60,24 @@ export type ProjectionEnvelope<TProjection> = {
   causedByTraceId?: string;
 };
 
+export type ProjectionPatchEnvelope = {
+  type: "projection:patch";
+  sessionId: string;
+  cursor: string;
+  patch: {
+    kind: "regions-invalidated";
+    regions: {
+      id: string;
+      resources: {
+        type: string;
+        id: string;
+        label: string;
+      }[];
+    }[];
+  };
+  causedByTraceId?: string;
+};
+
 export type ActionResultEnvelope = {
   type: "action:result";
   sessionId: string;
@@ -87,6 +105,7 @@ export type ErrorEnvelope = {
 
 export type ServerEnvelope<TProjection, TTrace> =
   | ConnectedEnvelope
+  | ProjectionPatchEnvelope
   | ProjectionEnvelope<TProjection>
   | ActionResultEnvelope
   | TraceEnvelope<TTrace>

@@ -55,6 +55,7 @@ describe("prototype runtime", () => {
 
     expect(result.envelopes.map((envelope) => envelope.type)).toEqual([
       "action:result",
+      "projection:patch",
       "projection:update",
       "trace:update",
     ]);

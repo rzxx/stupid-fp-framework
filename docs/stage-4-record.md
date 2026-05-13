@@ -32,6 +32,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Resume now keeps the old `resumed` boolean for client compatibility, but the durable semantic field is `connected.resume`.
 - Session message handling is now explicit through `SessionDefinition.accepts`; unknown messages fail at the kernel boundary.
 - Action payload validation belongs on each action definition before effects run; successful actions may return JSON result data through `action:result`.
+- Region metadata now drives `projection:patch` envelopes and `runtime.invalidate()` fanout; full projections remain the fallback payload.
 
 ## Progress
 
@@ -39,3 +40,8 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Stage 2 done: added explicit resume statuses, cursor-history replay, stale-cursor refresh, route-mismatch rejection, and contract tests.
 - Stage 3 done: moved resource observation to async-local scopes, added explicit invalid-message rejection, and covered parser payload validation.
 - Stage 4 done: added action validators, typed JSON result payloads, and invalid-action contract coverage.
+- Stage 5 done: added region patch envelopes, external invalidation fanout, and trace linkage for invalidated regions.
+
+## Skips
+
+- Action-triggered cross-socket delivery is not complete because the Bun host does not yet keep a session-to-socket registry. The kernel computes/fanouts through `runtime.invalidate()`, while `receive()` only returns envelopes for the initiating session.

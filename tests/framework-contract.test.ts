@@ -14,6 +14,7 @@ import {
   ResourceGraph,
   resourceKey,
   type ProjectionEnvelope,
+  type ProjectionPatchEnvelope,
   type RuntimeStore,
   type ServerEnvelope,
   type TraceEnvelope,
@@ -181,11 +182,18 @@ describe("framework contract", () => {
     });
 
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
+    const patch = latestPatch(result.envelopes);
     const projection = latestProjection(result.envelopes).projection;
     const trace = latestTrace(result.envelopes).trace;
 
     expect(action).toMatchObject({ ok: true, action: "increment" });
     expect(action).toMatchObject({ result: { count: 2 } });
+    expect(patch.patch.regions).toEqual([
+      {
+        id: "counter",
+        resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
+      },
+    ]);
     expect(projection.count).toBe(2);
     expect(services.counter.writes).toEqual(["increment:2"]);
     expect(trace.status).toBe("success");
@@ -198,6 +206,14 @@ describe("framework contract", () => {
         expect.objectContaining({
           phase: "resource",
           label: "resources invalidated",
+        }),
+        expect.objectContaining({
+          phase: "projection",
+          label: "regions invalidated",
+          detail: {
+            sessionId: connected.sessionId,
+            regions: ["counter"],
+          },
         }),
         expect.objectContaining({
           phase: "projection",
@@ -272,6 +288,29 @@ describe("framework contract", () => {
 
     const secondProjection = latestProjection(secondResult.envelopes).projection;
     expect(secondProjection.traceIds).not.toContain(firstTraceId);
+  });
+
+  test("external resource invalidation fans out patches and projections to affected sessions", async () => {
+    const services = createServices();
+    const runtime = createCounterRuntime(services);
+    const first = await connect(runtime);
+    const second = await connect(runtime);
+
+    services.counter.value = 7;
+    const result = await runtime.invalidate([counterKey]);
+
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+    const projections = result.envelopes.filter(
+      (envelope): envelope is ProjectionEnvelope<Projection> =>
+        envelope.type === "projection:update",
+    );
+
+    expect(patches.map((patch) => patch.sessionId).sort()).toEqual(
+      [first.sessionId, second.sessionId].sort(),
+    );
+    expect(projections.map((projection) => projection.projection.count)).toEqual([7, 7]);
   });
 
   test("memory store can resume session state with a fresh runtime projection", async () => {
@@ -521,6 +560,20 @@ function latestProjection(
   }
 
   return projection;
+}
+
+function latestPatch(
+  envelopes: ServerEnvelope<Projection, TraceSnapshot>[],
+): ProjectionPatchEnvelope {
+  const patch = envelopes.find(
+    (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+  );
+
+  if (!patch) {
+    throw new Error("Expected projection patch envelope");
+  }
+
+  return patch;
 }
 
 function latestTrace(
