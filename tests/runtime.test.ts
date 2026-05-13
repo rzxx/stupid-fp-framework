@@ -55,8 +55,8 @@ describe("prototype runtime", () => {
 
     expect(result.envelopes.map((envelope) => envelope.type)).toEqual([
       "action:result",
-      "trace:update",
       "projection:update",
+      "trace:update",
     ]);
     expect(latestProjection(result.envelopes).projectionVersion).toBe(2);
 

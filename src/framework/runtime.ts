@@ -128,8 +128,8 @@ export function createRuntime<
 
         return {
           envelopes: [
-            { type: "trace:update", sessionId: session.sessionId, trace },
             ...projected.envelopes,
+            { type: "trace:update", sessionId: session.sessionId, trace },
           ],
         };
       }
@@ -163,8 +163,8 @@ export function createRuntime<
             ok: result.ok,
             error: result.error,
           },
-          { type: "trace:update", sessionId: session.sessionId, trace },
           ...projected.envelopes,
+          { type: "trace:update", sessionId: session.sessionId, trace },
         ],
       };
     },
