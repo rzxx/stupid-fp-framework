@@ -84,22 +84,48 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
           setCursor(envelope.cursor);
           setLastPatch(envelope);
 
-          if (options.applyPatch) {
-            setProjection((current) => {
-              if (!current) {
-                return current;
-              }
-
-              const next = options.applyPatch?.(current, envelope) ?? current;
-
-              if (options.projectionTraces) {
-                setTraces((traces) => mergeTraces(traces, options.projectionTraces?.(next) ?? []));
-              }
-
-              setProjectionVersion(envelope.projectionVersion);
-              return next;
+          if (!options.applyPatch) {
+            setLastError({
+              type: "error",
+              sessionId: envelope.sessionId,
+              message: "No projection patch applier configured",
             });
+            return;
           }
+
+          const applyPatch = options.applyPatch;
+
+          setProjection((current) => {
+            if (!current) {
+              setLastError({
+                type: "error",
+                sessionId: envelope.sessionId,
+                message: "Cannot apply projection patch before projection is available",
+              });
+              return current;
+            }
+
+            let next: TProjection;
+
+            try {
+              next = applyPatch(current, envelope);
+            } catch (error) {
+              setLastError({
+                type: "error",
+                sessionId: envelope.sessionId,
+                message:
+                  error instanceof Error ? error.message : "Failed to apply projection patch",
+              });
+              return current;
+            }
+
+            if (options.projectionTraces) {
+              setTraces((traces) => mergeTraces(traces, options.projectionTraces?.(next) ?? []));
+            }
+
+            setProjectionVersion(envelope.projectionVersion);
+            return next;
+          });
         },
         onTrace(envelope) {
           setCursor(envelope.cursor);

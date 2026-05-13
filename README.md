@@ -99,7 +99,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
-bun test          # runs 31 contract + integration + acceptance tests
+bun test          # runs 38 contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
 ```
@@ -108,7 +108,7 @@ bun check         # typecheck + lint + format check
 
 ## project status
 
-This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 31 of them). But it's:
+This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 38 of them). But it's:
 
 - Not optimized for production
 - Not packaged for npm

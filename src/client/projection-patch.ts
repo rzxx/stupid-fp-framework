@@ -19,8 +19,8 @@ export function applyRegionValuePatch<TProjection>(
   for (const region of envelope.patch.regions) {
     const apply = handlers[region.id];
 
-    if (!apply || region.value === undefined) {
-      continue;
+    if (!apply) {
+      throw new Error(`No projection patch handler registered for region: ${region.id}`);
     }
 
     next = apply(next, region.value);

@@ -369,6 +369,68 @@ describe("framework contract", () => {
     expect(result.envelopes.some((envelope) => envelope.type === "projection:update")).toBe(false);
   });
 
+  test("action invalidation sends trace envelopes to every affected session", async () => {
+    const services = createServices();
+    const runtime = createCounterRuntime(services);
+    const first = await connect(runtime);
+    const second = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "message",
+      sessionId: first.sessionId,
+      message: { type: "action.increment", amount: 1 },
+    });
+
+    const secondPatch = result.envelopes.find(
+      (envelope): envelope is ProjectionPatchEnvelope =>
+        envelope.type === "projection:patch" && envelope.sessionId === second.sessionId,
+    );
+    const secondTrace = result.envelopes.find(
+      (envelope): envelope is TraceEnvelope<TraceSnapshot> =>
+        envelope.type === "trace:update" && envelope.sessionId === second.sessionId,
+    );
+
+    expect(secondPatch?.causedByTraceId).toBe(secondTrace?.trace.traceId);
+  });
+
+  test("unpatchable region values fall back to full projection updates", async () => {
+    const services = createServices();
+    const runtime = createUnpatchableRegionRuntime(services);
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "action.increment", amount: 1 },
+    });
+
+    expect(result.envelopes.some((envelope) => envelope.type === "projection:patch")).toBe(false);
+    expect(latestProjection(result.envelopes).projection.count).toBe(1);
+    expect(latestTrace(result.envelopes).trace.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "stream",
+          label: "projection fallback streamed",
+        }),
+      ]),
+    );
+  });
+
+  test("projection failures return error envelopes instead of throwing", async () => {
+    const runtime = createFailingProjectionRuntime();
+    const result = await runtime.connect({
+      type: "connect",
+      route: "/contract/:id",
+      params: { id: "main" },
+    });
+
+    expect(result.envelopes[0]).toMatchObject({ type: "connected" });
+    expect(result.envelopes[1]).toMatchObject({
+      type: "error",
+      message: "projection exploded",
+    });
+  });
+
   test("memory store can resume session state with a fresh runtime projection", async () => {
     const store = new MemoryRuntimeStore<SessionState, Projection>();
     await assertResumeRestoresSession(store);
@@ -427,6 +489,38 @@ describe("framework contract", () => {
       resume: { status: "replayed" },
     });
     expect(resumed.envelopes.some((envelope) => envelope.type === "trace:update")).toBe(true);
+  });
+
+  test("resume with patch-only missed history includes a projection baseline", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const firstRuntime = createCounterRuntime(services, store);
+    const connected = await connectWithEnvelope(firstRuntime);
+
+    await firstRuntime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+
+    const resumedRuntime = createCounterRuntime(services, store);
+    const resumed = await resumedRuntime.connect({
+      type: "connect",
+      route: "/contract/:id",
+      params: { id: "main" },
+      resume: {
+        sessionId: connected.sessionId,
+        cursor: connected.projectionEnvelope.cursor,
+      },
+    });
+
+    expect(resumed.envelopes[0]).toMatchObject({
+      type: "connected",
+      resumed: true,
+      resume: { status: "replayed" },
+    });
+    expect(resumed.envelopes[1]).toMatchObject({ type: "projection:update" });
+    expect(resumed.envelopes.some((envelope) => envelope.type === "projection:patch")).toBe(true);
   });
 
   test("resume with route mismatch creates a fresh session with an explicit rejection", async () => {
@@ -591,6 +685,83 @@ function createCounterRuntime(
   return createRuntime(program, { store });
 }
 
+function createUnpatchableRegionRuntime(
+  services = createServices(),
+  store?: RuntimeStore<SessionState, Projection>,
+) {
+  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
+    services,
+    resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
+    session: {
+      init: () => ({ selected: false }),
+      accepts: (message): message is SessionMessage =>
+        isMessage(message) && message.type === "session.toggle",
+      update: (state) => state,
+    },
+    screen: {
+      route: "/contract",
+      project: async (session, context) => {
+        const counter = await context.region("counter", async () => ({
+          count: await context.resources.read(context.services, counterKey),
+          unpatchable: () => undefined,
+        }));
+
+        return {
+          route: session.route,
+          params: session.params,
+          selected: session.state.selected,
+          count: counter.count,
+          traceIds: [],
+        };
+      },
+    },
+    actions: [
+      defineAction<
+        Services,
+        Extract<ActionMessage, { type: "action.increment" }>,
+        { count: number }
+      >(
+        "action.increment",
+        (message): message is Extract<ActionMessage, { type: "action.increment" }> =>
+          isMessage(message) &&
+          message.type === "action.increment" &&
+          "amount" in message &&
+          typeof message.amount === "number",
+        (message, context) =>
+          Effect.sync(() => {
+            context.services.counter.value += message.amount;
+            context.invalidate(counterKey);
+            return { count: context.services.counter.value };
+          }),
+      ),
+    ],
+  });
+
+  return createRuntime(program, { store });
+}
+
+function createFailingProjectionRuntime() {
+  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
+    services: createServices(),
+    resources: [],
+    session: {
+      init: () => ({ selected: false }),
+      accepts: (message): message is SessionMessage =>
+        isMessage(message) && message.type === "session.toggle",
+      update: (state) => state,
+    },
+    screen: {
+      route: "/contract",
+      project: () => {
+        throw new Error("projection exploded");
+      },
+    },
+    actions: [],
+  });
+
+  return createRuntime(program);
+}
+
 function createMultiScreenRuntime() {
   const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
     services: createServices(),
@@ -630,6 +801,12 @@ function createMultiScreenRuntime() {
 }
 
 async function connect(runtime: ReturnType<typeof createCounterRuntime>) {
+  const connected = await connectWithEnvelope(runtime);
+
+  return { sessionId: connected.sessionId, projection: connected.projectionEnvelope.projection };
+}
+
+async function connectWithEnvelope(runtime: ReturnType<typeof createCounterRuntime>) {
   const result = await runtime.connect({
     type: "connect",
     route: "/contract/:id",
@@ -643,7 +820,7 @@ async function connect(runtime: ReturnType<typeof createCounterRuntime>) {
 
   const projection = latestProjection(result.envelopes);
 
-  return { sessionId: connected.sessionId, projection: projection.projection };
+  return { sessionId: connected.sessionId, projectionEnvelope: projection };
 }
 
 function latestProjection(

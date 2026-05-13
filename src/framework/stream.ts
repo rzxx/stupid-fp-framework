@@ -70,7 +70,7 @@ export type ProjectionPatchEnvelope = {
     kind: "region-values";
     regions: {
       id: string;
-      value?: JsonValue;
+      value: JsonValue;
       resources: {
         type: string;
         id: string;

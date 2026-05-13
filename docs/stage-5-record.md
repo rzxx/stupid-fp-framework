@@ -37,10 +37,16 @@ This stage does not implement React Flight or a full framework UI tree. It estab
   - it connects the runtime, builds bootstrap state, renders HTML, and injects bootstrap JSON into the shell
 - Split the approval UI into a reusable `ApprovalApp`, a browser hydration entry, and a server render adapter.
 - Wired the browser client to prefer bootstrap resume state over stored resume state.
+- Hardened the patch contract after review:
+  - region-value patches now require replacement values
+  - unpatchable regions fall back to `projection:update`
+  - patch-only replay includes a projection baseline
+  - projection/resource failures return framework error envelopes
+  - affected sessions receive trace envelopes for action-caused patches
 
 ## Verification
 
-- `bun test`: 33 tests pass.
+- `bun test`: 38 tests pass.
 - `bun run check`: typecheck, lint, and format check pass.
 - Browser smoke on local Bun host port 3100:
   - loaded approval demo
@@ -60,5 +66,6 @@ This stage does not implement React Flight or a full framework UI tree. It estab
 ## Remaining Stage 5 Follow-Ups
 
 - Decide whether the next patch layer should be a framework-owned UI tree or a Flight-style adapter spike.
-- Add projection/resource failure behavior.
 - Add a live resource or process-resource demo slice after patch delivery is no longer scaffold.
+- Add a route-pattern/API ergonomics pass after patch semantics stay stable.
+- Decide store retention/versioning policy for longer-lived replay and schema changes.

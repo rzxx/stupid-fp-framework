@@ -37,4 +37,21 @@ describe("client projection patches", () => {
       localLabel: "kept",
     });
   });
+
+  test("rejects patches without a registered region handler", () => {
+    const patch: ProjectionPatchEnvelope = {
+      type: "projection:patch",
+      sessionId: "session-1",
+      cursor: "cursor-2",
+      projectionVersion: 2,
+      patch: {
+        kind: "region-values",
+        regions: [{ id: "missing", value: 2, resources: [] }],
+      },
+    };
+
+    expect(() => applyRegionValuePatch({ count: 1 }, patch, {})).toThrow(
+      "No projection patch handler registered for region: missing",
+    );
+  });
 });

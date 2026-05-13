@@ -1,9 +1,15 @@
 import { executeAction } from "./action";
+import type { JsonValue } from "./json";
 import type { Program } from "./program";
 import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
 import { MemoryRuntimeStore, type RuntimeStore } from "./store";
-import { type ClientEnvelope, type ResumeResult, type ServerEnvelope } from "./stream";
+import {
+  type ClientEnvelope,
+  type ProjectionPatchEnvelope,
+  type ResumeResult,
+  type ServerEnvelope,
+} from "./stream";
 import { SessionStore, type Session, type SessionSnapshot } from "./session";
 import { TraceStore, type TraceSnapshot } from "./trace";
 
@@ -113,14 +119,33 @@ export function createRuntime<
       };
     }
 
-    const observed = await program.resourceGraph.observe(() =>
-      screen.project(session, {
-        services: program.services,
-        resources: program.resourceGraph,
-        traces: traces.scoped(sessionId),
-        region: (id, read) => program.resourceGraph.region(id, read),
-      }),
-    );
+    let observed;
+
+    try {
+      observed = await program.resourceGraph.observe(() =>
+        screen.project(session, {
+          services: program.services,
+          resources: program.resourceGraph,
+          traces: traces.scoped(sessionId),
+          region: (id, read) => program.resourceGraph.region(id, read),
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Projection failed";
+
+      if (trace) {
+        traces.fail(trace, message);
+      }
+
+      return {
+        error: {
+          type: "error",
+          sessionId,
+          traceId: trace?.traceId,
+          message,
+        },
+      };
+    }
 
     if (trace) {
       traces.add(trace, "projection", "resources observed", {
@@ -187,8 +212,13 @@ export function createRuntime<
       await persistEnvelope(session, connected);
 
       if (resume?.replay) {
+        const replay =
+          resume.replay[0]?.type === "projection:update"
+            ? resume.replay
+            : [...(await project(session.sessionId)).envelopes, ...resume.replay];
+
         return {
-          envelopes: [connected, ...resume.replay],
+          envelopes: [connected, ...replay],
         };
       }
 
@@ -242,7 +272,9 @@ export function createRuntime<
         sessions.update(session, envelope.message as TSessionMessage);
         traces.add(trace, "session", `${envelope.message.type} applied`);
         const projected = await patchSession(session.sessionId, trace);
-        traces.complete(trace);
+        if (trace.status !== "error") {
+          traces.complete(trace);
+        }
 
         return {
           envelopes: [...projected.envelopes, await traceEnvelope(session, trace)],
@@ -276,12 +308,16 @@ export function createRuntime<
           ? await refreshAffectedSessions(result.invalidated, trace)
           : { envelopes: [] };
 
-      if (result.ok) {
+      if (result.ok && trace.status !== "error") {
         traces.complete(trace);
       }
 
       return {
-        envelopes: [actionResult, ...projected.envelopes, await traceEnvelope(session, trace)],
+        envelopes: [
+          actionResult,
+          ...projected.envelopes,
+          ...(await traceEnvelopesFor(session, projected.envelopes, trace)),
+        ],
       };
     },
   };
@@ -319,6 +355,32 @@ export function createRuntime<
     };
     await persistEnvelope(session, envelope);
     return envelope;
+  }
+
+  async function traceEnvelopesFor(
+    initiatingSession: Session<TSessionState>,
+    envelopes: ServerEnvelope<TProjection, TraceSnapshot>[],
+    trace: TraceSnapshot,
+  ): Promise<ServerEnvelope<TProjection, TraceSnapshot>[]> {
+    const targetSessionIds = new Set([initiatingSession.sessionId]);
+
+    for (const envelope of envelopes) {
+      if ("sessionId" in envelope && envelope.sessionId) {
+        targetSessionIds.add(envelope.sessionId);
+      }
+    }
+
+    const traceEnvelopes: ServerEnvelope<TProjection, TraceSnapshot>[] = [];
+
+    for (const sessionId of targetSessionIds) {
+      const targetSession = sessions.get(sessionId);
+
+      if (targetSession) {
+        traceEnvelopes.push(await traceEnvelope(targetSession, trace));
+      }
+    }
+
+    return traceEnvelopes;
   }
 
   async function patchSession(
@@ -371,8 +433,8 @@ export function createRuntime<
 
       const invalidatedRegionIds = new Set(affectedSession.regions.map((region) => region.id));
       const regions = computed.regions.filter((region) => invalidatedRegionIds.has(region.id));
-      const patch = await patchEnvelope(computed, regions, trace);
-      envelopes.push(patch);
+      const patchOrProjection = await patchEnvelope(computed, regions, trace);
+      envelopes.push(patchOrProjection);
     }
 
     return { envelopes };
@@ -381,12 +443,31 @@ export function createRuntime<
   async function patchEnvelope(
     computed: {
       session: Session<TSessionState>;
+      projection: TProjection;
       projectionVersion: number;
       regions: ProjectionRegionSnapshot[];
     },
     regions: ProjectionRegionSnapshot[],
     trace?: TraceSnapshot,
   ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
+    const patchRegions = patchableRegions(regions);
+
+    if (!patchRegions) {
+      const fallback = projectionEnvelope(computed, trace);
+      await persistEnvelope(computed.session, fallback);
+
+      if (trace) {
+        traces.add(trace, "stream", "projection fallback streamed", {
+          sessionId: computed.session.sessionId,
+          projectionVersion: computed.projectionVersion,
+          reason: "unpatchable-region-values",
+          regions: regions.map((region) => region.id),
+        });
+      }
+
+      return fallback;
+    }
+
     const patch: ServerEnvelope<TProjection, TraceSnapshot> = {
       type: "projection:patch",
       sessionId: computed.session.sessionId,
@@ -394,7 +475,7 @@ export function createRuntime<
       projectionVersion: computed.projectionVersion,
       patch: {
         kind: "region-values",
-        regions,
+        regions: patchRegions,
       },
       causedByTraceId: trace?.traceId,
     };
@@ -492,4 +573,24 @@ function affectedRegions(
   }
 
   return affected;
+}
+
+function patchableRegions(
+  regions: ProjectionRegionSnapshot[],
+): ProjectionPatchEnvelope["patch"]["regions"] | null {
+  const patchRegions: ProjectionPatchEnvelope["patch"]["regions"] = [];
+
+  for (const region of regions) {
+    if (region.value === undefined) {
+      return null;
+    }
+
+    patchRegions.push({
+      id: region.id,
+      value: region.value as JsonValue,
+      resources: region.resources,
+    });
+  }
+
+  return patchRegions;
 }
