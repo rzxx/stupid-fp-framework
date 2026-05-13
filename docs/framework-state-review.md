@@ -465,24 +465,24 @@ Recommended next move:
 
 ## Contract Map
 
-| Framework promise | Current evidence | Coverage status | Gap |
-| --- | --- | --- | --- |
-| Browser sends framework messages, not app APIs | `src/client/program-stream.ts`, `src/server.ts` | Runtime/protocol tests and browser manual verification | No automated browser smoke test |
-| Program groups resources/actions/session/projection | `src/framework/program.ts` | Framework contract tests | Only one screen |
-| Session state is separate from durable resources | `tests/framework-contract.test.ts`, `tests/approvals.test.ts` | Covered | Need richer session restore failure tests |
-| Actions mutate durable state and invalidate resources | `tests/framework-contract.test.ts`, `tests/approvals.test.ts` | Covered | No typed result payloads or input validation |
-| Failed actions do not mutate durable state | `tests/framework-contract.test.ts`, `tests/approvals.test.ts` | Covered | Failure taxonomy is shallow |
-| Resources are observed during projection | `tests/framework-contract.test.ts` | Covered | Single-resource/simple-region coverage only |
-| Invalidated resources map to affected regions | `tests/framework-contract.test.ts` | Covered | Not used for fanout or patches |
-| Whole projection updates stream to browser | `tests/runtime.test.ts`, browser manual verification | Covered | No patch/region update protocol |
-| Resume restores session state | `tests/framework-contract.test.ts`, browser manual verification | Covered | No replay/fallback/invalid resume semantics |
-| Store envelope history exists | `tests/framework-contract.test.ts` | Unit-level covered | Runtime does not use it on resume |
-| Traces explain actions | `tests/runtime.test.ts`, browser manual verification | Covered | Trace safety/devtools model missing |
-| React can host local-only state | Browser manual verification | Manual only | No adapter/client tests |
-| Renderer-agnostic kernel pressure | `src/framework` avoids React imports | Partially covered by architecture | Projection shape is still demo data |
-| Live resource updates | None | Not covered | Missing |
-| Multi-screen routing | None | Not covered | Missing |
-| RSC/Flight adapter optionality | Docs only | Not covered | Intentionally missing |
+| Framework promise                                     | Current evidence                                                | Coverage status                                        | Gap                                          |
+| ----------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------- |
+| Browser sends framework messages, not app APIs        | `src/client/program-stream.ts`, `src/server.ts`                 | Runtime/protocol tests and browser manual verification | No automated browser smoke test              |
+| Program groups resources/actions/session/projection   | `src/framework/program.ts`                                      | Framework contract tests                               | Only one screen                              |
+| Session state is separate from durable resources      | `tests/framework-contract.test.ts`, `tests/approvals.test.ts`   | Covered                                                | Need richer session restore failure tests    |
+| Actions mutate durable state and invalidate resources | `tests/framework-contract.test.ts`, `tests/approvals.test.ts`   | Covered                                                | No typed result payloads or input validation |
+| Failed actions do not mutate durable state            | `tests/framework-contract.test.ts`, `tests/approvals.test.ts`   | Covered                                                | Failure taxonomy is shallow                  |
+| Resources are observed during projection              | `tests/framework-contract.test.ts`                              | Covered                                                | Single-resource/simple-region coverage only  |
+| Invalidated resources map to affected regions         | `tests/framework-contract.test.ts`                              | Covered                                                | Not used for fanout or patches               |
+| Whole projection updates stream to browser            | `tests/runtime.test.ts`, browser manual verification            | Covered                                                | No patch/region update protocol              |
+| Resume restores session state                         | `tests/framework-contract.test.ts`, browser manual verification | Covered                                                | No replay/fallback/invalid resume semantics  |
+| Store envelope history exists                         | `tests/framework-contract.test.ts`                              | Unit-level covered                                     | Runtime does not use it on resume            |
+| Traces explain actions                                | `tests/runtime.test.ts`, browser manual verification            | Covered                                                | Trace safety/devtools model missing          |
+| React can host local-only state                       | Browser manual verification                                     | Manual only                                            | No adapter/client tests                      |
+| Renderer-agnostic kernel pressure                     | `src/framework` avoids React imports                            | Partially covered by architecture                      | Projection shape is still demo data          |
+| Live resource updates                                 | None                                                            | Not covered                                            | Missing                                      |
+| Multi-screen routing                                  | None                                                            | Not covered                                            | Missing                                      |
+| RSC/Flight adapter optionality                        | Docs only                                                       | Not covered                                            | Intentionally missing                        |
 
 ## Tests That Are Too Implementation-Coupled
 
