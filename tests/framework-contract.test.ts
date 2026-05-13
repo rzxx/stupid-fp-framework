@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   actionFailure,
+  Action,
   createRuntime,
-  defineAction,
   defineProgram,
   defineResource,
   Context,
@@ -14,7 +14,10 @@ import {
   MemoryRuntimeStore,
   parseClientEnvelope,
   ResourceGraph,
+  Route,
   resourceKey,
+  Schema,
+  Session,
   type ProjectionEnvelope,
   type ProjectionPatchEnvelope,
   type RuntimeStore,
@@ -64,6 +67,29 @@ type Projection = {
 };
 
 const counterKey = resourceKey<number>("Counter", "main");
+const counterRoute = Route.define("/contract/:id", {
+  params: Schema.Struct({ id: Schema.String }),
+});
+const incrementSchema = Schema.Struct({
+  type: Schema.Literal("action.increment"),
+  amount: Schema.Number,
+});
+const failSchema = Schema.Struct({
+  type: Schema.Literal("action.fail"),
+});
+const toggleSchema = Schema.Struct({
+  type: Schema.Literal("session.toggle"),
+});
+const counterSession = Session.define<SessionState, SessionMessage>({
+  init: () => ({ selected: false }),
+  messages: [
+    {
+      type: "session.toggle",
+      schema: toggleSchema,
+      update: (state) => ({ selected: !state.selected }),
+    },
+  ],
+});
 
 describe("framework contract", () => {
   test("connect accepts app-defined routes and params at the stream boundary", async () => {
@@ -110,6 +136,19 @@ describe("framework contract", () => {
 
     expect(latestProjection(first.envelopes).projection.route).toBe("/first");
     expect(latestProjection(second.envelopes).projection.route).toBe("/second");
+  });
+
+  test("route definitions resolve concrete paths and decode params", async () => {
+    const runtime = createCounterRuntime();
+    const result = await runtime.connect({
+      type: "connect",
+      route: "/contract/main",
+      params: {},
+    });
+
+    const projection = latestProjection(result.envelopes).projection;
+    expect(projection.route).toBe("/contract/:id");
+    expect(projection.params).toEqual({ id: "main" });
   });
 
   test("invalidated resources map back to observed projection regions", async () => {
@@ -669,20 +708,9 @@ function createCounterRuntime(
         Effect.map(CounterService, (counter) => counter.value),
       ),
     ],
-    session: {
-      init: () => ({ selected: false }),
-      accepts: (message): message is SessionMessage =>
-        isMessage(message) && message.type === "session.toggle",
-      update: (state, message) => {
-        if (message.type === "session.toggle") {
-          return { selected: !state.selected };
-        }
-
-        return state;
-      },
-    },
+    session: counterSession,
     screen: {
-      route: "/contract",
+      route: counterRoute,
       project: (session, context) =>
         Effect.gen(function* () {
           return {
@@ -699,18 +727,9 @@ function createCounterRuntime(
         }),
     },
     actions: [
-      defineAction<
-        Extract<ActionMessage, { type: "action.increment" }>,
-        { count: number },
-        TestEnvironment
-      >(
-        "action.increment",
-        (message): message is Extract<ActionMessage, { type: "action.increment" }> =>
-          isMessage(message) &&
-          message.type === "action.increment" &&
-          "amount" in message &&
-          typeof message.amount === "number",
-        (message, context) =>
+      Action.define("action.increment")
+        .input(incrementSchema)
+        .run<{ count: number }, TestEnvironment>((message, context) =>
           Effect.gen(function* () {
             const counter = yield* CounterService;
             counter.value += message.amount;
@@ -718,13 +737,10 @@ function createCounterRuntime(
             context.invalidate(counterKey);
             return { count: counter.value };
           }),
-      ),
-      defineAction<Extract<ActionMessage, { type: "action.fail" }>>(
-        "action.fail",
-        (message): message is Extract<ActionMessage, { type: "action.fail" }> =>
-          isMessage(message) && message.type === "action.fail",
-        () => Effect.fail(actionFailure("contract failure")),
-      ),
+        ),
+      Action.define("action.fail")
+        .input(failSchema)
+        .run(() => Effect.fail(actionFailure("contract failure"))),
     ],
   });
 
@@ -748,12 +764,16 @@ function createUnpatchableRegionRuntime(
         Effect.map(CounterService, (counter) => counter.value),
       ),
     ],
-    session: {
+    session: Session.define<SessionState, SessionMessage>({
       init: () => ({ selected: false }),
-      accepts: (message): message is SessionMessage =>
-        isMessage(message) && message.type === "session.toggle",
-      update: (state) => state,
-    },
+      messages: [
+        {
+          type: "session.toggle",
+          schema: toggleSchema,
+          update: (state) => state,
+        },
+      ],
+    }),
     screen: {
       route: "/contract",
       project: (session, context) =>
@@ -775,25 +795,16 @@ function createUnpatchableRegionRuntime(
         }),
     },
     actions: [
-      defineAction<
-        Extract<ActionMessage, { type: "action.increment" }>,
-        { count: number },
-        TestEnvironment
-      >(
-        "action.increment",
-        (message): message is Extract<ActionMessage, { type: "action.increment" }> =>
-          isMessage(message) &&
-          message.type === "action.increment" &&
-          "amount" in message &&
-          typeof message.amount === "number",
-        (message, context) =>
+      Action.define("action.increment")
+        .input(incrementSchema)
+        .run<{ count: number }, TestEnvironment>((message, context) =>
           Effect.gen(function* () {
             const counter = yield* CounterService;
             counter.value += message.amount;
             context.invalidate(counterKey);
             return { count: counter.value };
           }),
-      ),
+        ),
     ],
   });
 
@@ -810,12 +821,16 @@ function createFailingProjectionRuntime() {
   >({
     layer: createServicesLayer(createServices()),
     resources: [],
-    session: {
+    session: Session.define<SessionState, SessionMessage>({
       init: () => ({ selected: false }),
-      accepts: (message): message is SessionMessage =>
-        isMessage(message) && message.type === "session.toggle",
-      update: (state) => state,
-    },
+      messages: [
+        {
+          type: "session.toggle",
+          schema: toggleSchema,
+          update: (state) => state,
+        },
+      ],
+    }),
     screen: {
       route: "/contract",
       project: () => Effect.die(new Error("projection exploded")),
@@ -840,12 +855,16 @@ function createMultiScreenRuntime() {
         Effect.map(CounterService, (counter) => counter.value),
       ),
     ],
-    session: {
+    session: Session.define<SessionState, SessionMessage>({
       init: () => ({ selected: false }),
-      accepts: (message): message is SessionMessage =>
-        isMessage(message) && message.type === "session.toggle",
-      update: (state) => state,
-    },
+      messages: [
+        {
+          type: "session.toggle",
+          schema: toggleSchema,
+          update: (state) => state,
+        },
+      ],
+    }),
     screens: [
       {
         route: "/first",
@@ -1028,12 +1047,6 @@ function applyCounterPatch(projection: Projection, patch: ProjectionPatchEnvelop
 
     return current;
   }, projection);
-}
-
-function isMessage(value: unknown): value is { type: string } {
-  return (
-    value !== null && typeof value === "object" && "type" in value && typeof value.type === "string"
-  );
 }
 
 async function delay(milliseconds: number): Promise<void> {

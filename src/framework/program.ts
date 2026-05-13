@@ -3,6 +3,7 @@ import { Layer, ManagedRuntime } from "./effect";
 import type { JsonValue } from "./json";
 import { ResourceGraph, type ResourceDefinition } from "./resource";
 import type { ScreenDefinition } from "./projection";
+import type { RouteDefinition } from "./route";
 import type { SessionDefinition } from "./session";
 
 export type ProgramDefinition<
@@ -33,6 +34,7 @@ export type Program<
   actionByType: Map<string, ActionDefinition<R, TActionMessage, JsonValue | void>>;
   screens: ScreenDefinition<R, TSessionState, TProjection>[];
   screenByRoute: Map<string, ScreenDefinition<R, TSessionState, TProjection>>;
+  routes: RouteDefinition[];
 };
 
 export function defineProgram<
@@ -57,10 +59,23 @@ export function defineProgram<
     layer,
     runtime: ManagedRuntime.make(layer),
     screens,
-    screenByRoute: new Map(screens.map((screen) => [screen.route, screen])),
+    screenByRoute: new Map(screens.map((screen) => [screenRoutePattern(screen), screen])),
+    routes: screens.map(screenRouteDefinition).filter((route) => route !== null),
     resourceGraph,
     actionByType: new Map(definition.actions.map((action) => [String(action.type), action])),
   };
+}
+
+export function screenRoutePattern<R, TSessionState, TProjection>(
+  screen: ScreenDefinition<R, TSessionState, TProjection>,
+): string {
+  return typeof screen.route === "string" ? screen.route : screen.route.pattern;
+}
+
+export function screenRouteDefinition<R, TSessionState, TProjection>(
+  screen: ScreenDefinition<R, TSessionState, TProjection>,
+): RouteDefinition | null {
+  return typeof screen.route === "string" ? null : screen.route;
 }
 
 function normalizeScreens<

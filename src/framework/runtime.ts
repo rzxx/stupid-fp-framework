@@ -1,6 +1,6 @@
 import { executeAction } from "./action";
 import type { JsonValue } from "./json";
-import type { Program } from "./program";
+import { screenRouteDefinition, screenRoutePattern, type Program } from "./program";
 import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
 import { MemoryRuntimeStore, type RuntimeStore } from "./store";
@@ -197,12 +197,17 @@ export function createRuntime<
     },
 
     async connect(envelope) {
+      const resolved = resolveRoute(envelope.route, envelope.params);
+      const connectRoute = resolved ?? {
+        route: envelope.route,
+        params: envelope.params,
+      };
       const resume = envelope.resume
-        ? await resolveResume(envelope.route, envelope.params, envelope.resume)
+        ? await resolveResume(connectRoute.route, connectRoute.params, envelope.resume)
         : null;
       const session = resume?.snapshot
         ? sessions.restore(resume.snapshot)
-        : sessions.create(envelope.route, envelope.params);
+        : sessions.create(connectRoute.route, connectRoute.params);
       const connected: ServerEnvelope<TProjection, TraceSnapshot> = {
         type: "connected",
         sessionId: session.sessionId,
@@ -542,6 +547,31 @@ export function createRuntime<
     return (
       program.screenByRoute.get(route) ?? (program.screens.length === 1 ? program.screens[0] : null)
     );
+  }
+
+  function resolveRoute(route: string, params: Record<string, string>) {
+    const exact = program.screenByRoute.get(route);
+
+    if (exact) {
+      const definition = screenRouteDefinition(exact);
+      const matched = definition?.match(route, params);
+
+      return {
+        route: screenRoutePattern(exact),
+        params: matched?.params ?? params,
+      };
+    }
+
+    for (const screen of program.screens) {
+      const definition = screenRouteDefinition(screen);
+      const matched = definition?.match(route, params);
+
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return null;
   }
 }
 

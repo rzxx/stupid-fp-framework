@@ -1,4 +1,10 @@
-import { Effect, type ProjectionContext, type ScreenDefinition } from "../../framework";
+import {
+  Effect,
+  Route,
+  Schema,
+  type ProjectionContext,
+  type ScreenDefinition,
+} from "../../framework";
 import { AuditTrail, Deployment, PendingDeployments } from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
 import type {
@@ -15,7 +21,9 @@ export const approvalScreen: ScreenDefinition<
   ApprovalSessionState,
   ApprovalProjection
 > = {
-  route: "/teams/:teamId/deployments",
+  route: Route.define("/teams/:teamId/deployments", {
+    params: Schema.Struct({ teamId: Schema.String }),
+  }),
   project(session, context) {
     return Effect.gen(function* () {
       const teamId = session.params.teamId;

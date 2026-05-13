@@ -1,4 +1,4 @@
-import { actionFailure, defineAction, Effect, type ActionDefinition } from "../../framework";
+import { Action, actionFailure, Effect, Schema, type ActionDefinition } from "../../framework";
 import { AuditTrail, Deployment, PendingDeployments } from "./resources";
 import { Audit, Auth, Clock, Deployments, type ApprovalEnvironment } from "./services";
 import type { ApprovalActionMessage } from "./types";
@@ -7,14 +7,14 @@ export const approveDeploymentAction: ActionDefinition<
   ApprovalEnvironment,
   ApprovalActionMessage,
   { deploymentId: string; status: "approved" }
-> = defineAction(
-  "action.approveDeployment",
-  (message): message is ApprovalActionMessage =>
-    isMessage(message) &&
-    message.type === "action.approveDeployment" &&
-    "deploymentId" in message &&
-    typeof message.deploymentId === "string",
-  (message, context) =>
+> = Action.define("action.approveDeployment")
+  .input(
+    Schema.Struct({
+      type: Schema.Literal("action.approveDeployment"),
+      deploymentId: Schema.String,
+    }),
+  )
+  .run((message, context) =>
     Effect.gen(function* () {
       context.traces.add(context.trace, "validation", "input validated", {
         deploymentId: message.deploymentId,
@@ -103,12 +103,6 @@ export const approveDeploymentAction: ActionDefinition<
 
       return { deploymentId: deployment.id, status: "approved" as const };
     }),
-);
+  );
 
 export const approvalActions = [approveDeploymentAction];
-
-function isMessage(value: unknown): value is { type: string } {
-  return (
-    value !== null && typeof value === "object" && "type" in value && typeof value.type === "string"
-  );
-}

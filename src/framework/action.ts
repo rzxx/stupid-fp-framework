@@ -1,6 +1,7 @@
 import { Effect, type ManagedRuntime } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
 import type { ResourceKey } from "./resource";
+import { acceptsSchema, type FrameworkSchema } from "./schema";
 import type { TraceSnapshot, TraceStore } from "./trace";
 
 export type ActionFailure = {
@@ -54,6 +55,22 @@ export function defineAction<
 ): ActionDefinition<R, TMessage, TResult> {
   return { type, accepts, run };
 }
+
+export const Action = {
+  define<TType extends string>(type: TType) {
+    return {
+      input<TMessage extends { type: TType }>(schema: FrameworkSchema<TMessage>) {
+        return {
+          run<TResult extends JsonValue | void = void, R = never>(
+            run: (message: TMessage, context: ActionContext) => ActionEffect<TResult, R>,
+          ): ActionDefinition<R, TMessage, TResult> {
+            return defineAction(type, acceptsSchema(schema), run);
+          },
+        };
+      },
+    };
+  },
+};
 
 export async function executeAction<R, TMessage extends { type: string }>(
   action: ActionDefinition<R, TMessage>,

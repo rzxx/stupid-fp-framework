@@ -1,6 +1,7 @@
 import type { Effect } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
 import type { ResourceFailure, ResourceGraph } from "./resource";
+import type { RouteDefinition } from "./route";
 import type { Session } from "./session";
 import type { TraceReader } from "./trace";
 
@@ -29,7 +30,7 @@ export type ProjectionContext<R> = {
 };
 
 export type ScreenDefinition<R, TSessionState, TProjection> = {
-  route: string;
+  route: string | RouteDefinition;
   project: (
     session: Session<TSessionState>,
     context: ProjectionContext<R>,
