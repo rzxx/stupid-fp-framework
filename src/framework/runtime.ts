@@ -100,8 +100,8 @@ export function createRuntime<
         sessions.update(session, envelope.message as TSessionMessage);
         traces.add(trace, "session", `${envelope.message.type} applied`);
         traces.complete(trace);
-        const projected = await project(session.sessionId);
         traces.add(trace, "projection", "projection recomputed");
+        const projected = await project(session.sessionId);
 
         return {
           envelopes: [
@@ -121,8 +121,8 @@ export function createRuntime<
 
       program.resourceGraph.invalidate(result.invalidated);
 
-      const projected = await project(session.sessionId);
       traces.add(trace, "projection", "projection recomputed");
+      const projected = await project(session.sessionId);
 
       return {
         envelopes: [

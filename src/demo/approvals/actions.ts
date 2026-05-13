@@ -30,11 +30,9 @@ export const approveDeploymentAction: ActionDefinition<ApprovalServices, Approva
       }
 
       if (user.role !== "approver") {
-        context.services.audit.write({
-          actorId: user.id,
-          event: "deployment.approval_denied",
+        context.traces.add(context.trace, "permission", "permission rejected", {
+          userId: user.id,
           deploymentId: deployment.id,
-          detail: { reason: "viewer role cannot approve" },
         });
         return yield* Effect.fail(
           actionFailure("User is not allowed to approve deployments", {
