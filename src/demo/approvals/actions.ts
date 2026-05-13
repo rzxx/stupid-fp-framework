@@ -3,8 +3,18 @@ import { AuditTrail, Deployment, PendingDeployments } from "./resources";
 import type { ApprovalServices } from "./services";
 import type { ApprovalActionMessage } from "./types";
 
-export const approveDeploymentAction: ActionDefinition<ApprovalServices, ApprovalActionMessage> =
-  defineAction("action.approveDeployment", (message, context) =>
+export const approveDeploymentAction: ActionDefinition<
+  ApprovalServices,
+  ApprovalActionMessage,
+  { deploymentId: string; status: "approved" }
+> = defineAction(
+  "action.approveDeployment",
+  (message): message is ApprovalActionMessage =>
+    isMessage(message) &&
+    message.type === "action.approveDeployment" &&
+    "deploymentId" in message &&
+    typeof message.deploymentId === "string",
+  (message, context) =>
     Effect.gen(function* () {
       context.traces.add(context.trace, "validation", "input validated", {
         deploymentId: message.deploymentId,
@@ -89,7 +99,15 @@ export const approveDeploymentAction: ActionDefinition<ApprovalServices, Approva
       context.invalidate(Deployment(deployment.id));
       context.invalidate(PendingDeployments(deployment.teamId));
       context.invalidate(AuditTrail(deployment.id));
+
+      return { deploymentId: deployment.id, status: "approved" as const };
     }),
-  );
+);
 
 export const approvalActions = [approveDeploymentAction];
+
+function isMessage(value: unknown): value is { type: string } {
+  return (
+    value !== null && typeof value === "object" && "type" in value && typeof value.type === "string"
+  );
+}

@@ -212,6 +212,7 @@ export function createRuntime<
         action: envelope.message.type.replace(/^action\./, ""),
         ok: result.ok,
         error: result.error,
+        result: result.result,
       };
       await persistEnvelope(session, actionResult);
       const projected = await project(session.sessionId, trace);

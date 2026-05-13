@@ -1,4 +1,5 @@
 import type { ActionDefinition } from "./action";
+import type { JsonValue } from "./json";
 import { ResourceGraph, type ResourceDefinition } from "./resource";
 import type { ScreenDefinition } from "./projection";
 import type { SessionDefinition } from "./session";
@@ -14,7 +15,7 @@ export type ProgramDefinition<
   resources: ResourceDefinition<TServices, unknown>[];
   session: SessionDefinition<TSessionState, TSessionMessage>;
   screen: ScreenDefinition<TServices, TSessionState, TProjection>;
-  actions: ActionDefinition<TServices, TActionMessage>[];
+  actions: ActionDefinition<TServices, TActionMessage, JsonValue | void>[];
 };
 
 export type Program<
@@ -25,7 +26,7 @@ export type Program<
   TProjection,
 > = ProgramDefinition<TServices, TSessionState, TSessionMessage, TActionMessage, TProjection> & {
   resourceGraph: ResourceGraph<TServices>;
-  actionByType: Map<string, ActionDefinition<TServices, TActionMessage>>;
+  actionByType: Map<string, ActionDefinition<TServices, TActionMessage, JsonValue | void>>;
 };
 
 export function defineProgram<

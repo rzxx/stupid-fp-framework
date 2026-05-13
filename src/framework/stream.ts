@@ -1,3 +1,5 @@
+import type { JsonValue } from "./json";
+
 export type ConnectEnvelope = {
   type: "connect";
   route: string;
@@ -66,6 +68,7 @@ export type ActionResultEnvelope = {
   action: string;
   ok: boolean;
   error?: string;
+  result?: JsonValue;
 };
 
 export type TraceEnvelope<TTrace> = {

@@ -21,7 +21,10 @@ describe("deployment approval workflow", () => {
     const projection = latestProjection(result.envelopes);
     const actionResult = result.envelopes.find((envelope) => envelope.type === "action:result");
 
-    expect(actionResult).toMatchObject({ ok: true });
+    expect(actionResult).toMatchObject({
+      ok: true,
+      result: { deploymentId, status: "approved" },
+    });
     expect(
       projection.projection.pendingDeployments.some((deployment) => deployment.id === deploymentId),
     ).toBe(false);

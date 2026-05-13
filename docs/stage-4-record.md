@@ -31,9 +31,11 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - React integration should become an adapter surface without introducing client cache ownership.
 - Resume now keeps the old `resumed` boolean for client compatibility, but the durable semantic field is `connected.resume`.
 - Session message handling is now explicit through `SessionDefinition.accepts`; unknown messages fail at the kernel boundary.
+- Action payload validation belongs on each action definition before effects run; successful actions may return JSON result data through `action:result`.
 
 ## Progress
 
 - Stage 1 done: restored formatting hygiene, confirmed `bun test` and `bun run check` pass.
 - Stage 2 done: added explicit resume statuses, cursor-history replay, stale-cursor refresh, route-mismatch rejection, and contract tests.
 - Stage 3 done: moved resource observation to async-local scopes, added explicit invalid-message rejection, and covered parser payload validation.
+- Stage 4 done: added action validators, typed JSON result payloads, and invalid-action contract coverage.

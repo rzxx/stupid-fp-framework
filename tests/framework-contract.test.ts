@@ -185,6 +185,7 @@ describe("framework contract", () => {
     const trace = latestTrace(result.envelopes).trace;
 
     expect(action).toMatchObject({ ok: true, action: "increment" });
+    expect(action).toMatchObject({ result: { count: 2 } });
     expect(projection.count).toBe(2);
     expect(services.counter.writes).toEqual(["increment:2"]);
     expect(trace.status).toBe("success");
@@ -224,6 +225,29 @@ describe("framework contract", () => {
 
     expect(action).toMatchObject({ ok: false, error: "contract failure" });
     expect(projection.count).toBe(0);
+    expect(services.counter.writes).toEqual([]);
+    expect(trace.status).toBe("error");
+  });
+
+  test("invalid action payloads fail before effects mutate durable resources", async () => {
+    const services = createServices();
+    const runtime = createCounterRuntime(services);
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "action.increment", amount: "nope" } as unknown as ActionMessage,
+    });
+
+    const action = result.envelopes.find((envelope) => envelope.type === "action:result");
+    const trace = latestTrace(result.envelopes).trace;
+
+    expect(action).toMatchObject({
+      ok: false,
+      error: "Invalid action payload: action.increment",
+    });
+    expect(services.counter.value).toBe(0);
     expect(services.counter.writes).toEqual([]);
     expect(trace.status).toBe("error");
   });
@@ -439,17 +463,30 @@ function createCounterRuntime(
       }),
     },
     actions: [
-      defineAction<Services, Extract<ActionMessage, { type: "action.increment" }>>(
+      defineAction<
+        Services,
+        Extract<ActionMessage, { type: "action.increment" }>,
+        { count: number }
+      >(
         "action.increment",
+        (message): message is Extract<ActionMessage, { type: "action.increment" }> =>
+          isMessage(message) &&
+          message.type === "action.increment" &&
+          "amount" in message &&
+          typeof message.amount === "number",
         (message, context) =>
           Effect.sync(() => {
             context.services.counter.value += message.amount;
             context.services.counter.writes.push(`increment:${message.amount}`);
             context.invalidate(counterKey);
+            return { count: context.services.counter.value };
           }),
       ),
-      defineAction<Services, Extract<ActionMessage, { type: "action.fail" }>>("action.fail", () =>
-        Effect.fail(actionFailure("contract failure")),
+      defineAction<Services, Extract<ActionMessage, { type: "action.fail" }>>(
+        "action.fail",
+        (message): message is Extract<ActionMessage, { type: "action.fail" }> =>
+          isMessage(message) && message.type === "action.fail",
+        () => Effect.fail(actionFailure("contract failure")),
       ),
     ],
   });
