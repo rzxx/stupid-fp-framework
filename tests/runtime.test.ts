@@ -4,6 +4,7 @@ import type { ApprovalProjection } from "../src/demo/approvals/types";
 import {
   parseClientEnvelope,
   type ProjectionEnvelope,
+  type ProjectionPatchEnvelope,
   type ServerEnvelope,
   type TraceSnapshot,
 } from "../src/framework";
@@ -36,13 +37,19 @@ describe("prototype runtime", () => {
       sessionId: connected.sessionId,
       message: { type: "session.selectDeployment", deploymentId },
     });
-    const projection = latestProjection(result.envelopes);
+    const patch = latestPatch(result.envelopes);
+    const selected = patch.patch.regions.find((region) => region.id === "selectedDeployment");
 
-    expect(projection.projection.selectedDeployment?.id).toBe(deploymentId);
-    expect(projection.projection.pendingDeployments).toHaveLength(before.pendingDeployments.length);
+    expect(selected?.value).toMatchObject({ id: deploymentId });
+    const pendingDeployments = patch.patch.regions.find(
+      (region) => region.id === "pendingDeployments",
+    );
+    expect(Array.isArray(pendingDeployments?.value) ? pendingDeployments.value : []).toHaveLength(
+      before.pendingDeployments.length,
+    );
   });
 
-  test("action returns result, trace, and projection envelopes", async () => {
+  test("action returns result, patch, and trace envelopes", async () => {
     const runtime = createApprovalRuntime();
     const connected = await connect(runtime);
     const deploymentId = latestProjection(connected.envelopes).projection.pendingDeployments[0]?.id;
@@ -56,10 +63,9 @@ describe("prototype runtime", () => {
     expect(result.envelopes.map((envelope) => envelope.type)).toEqual([
       "action:result",
       "projection:patch",
-      "projection:update",
       "trace:update",
     ]);
-    expect(latestProjection(result.envelopes).projectionVersion).toBe(2);
+    expect(latestPatch(result.envelopes).projectionVersion).toBe(2);
 
     const trace = result.envelopes.find((envelope) => envelope.type === "trace:update");
     expect(trace?.trace.events.map((event) => event.phase)).toContain("resource");
@@ -119,4 +125,18 @@ function latestProjection(
   }
 
   return projection;
+}
+
+function latestPatch(
+  envelopes: ServerEnvelope<ApprovalProjection, TraceSnapshot>[],
+): ProjectionPatchEnvelope {
+  const patch = envelopes.find(
+    (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+  );
+
+  if (!patch) {
+    throw new Error("Expected projection patch envelope");
+  }
+
+  return patch;
 }

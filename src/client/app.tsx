@@ -28,10 +28,13 @@ function App() {
             ...current,
             selectedDeployment: value as ApprovalProjection["selectedDeployment"],
           }),
-          tracePanel: (current, value) =>
-            Array.isArray(value)
-              ? { ...current, traces: value as ApprovalProjection["traces"] }
-              : current,
+          tracePanel: (current, value) => {
+            if (!isTracePanelPatch(value)) {
+              return current;
+            }
+
+            return { ...current, tracePanelOpen: value.open, traces: value.traces };
+          },
         }),
     };
   }, []);
@@ -256,6 +259,19 @@ function formatTime(value: string): string {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(value));
+}
+
+function isTracePanelPatch(
+  value: unknown,
+): value is { open: boolean; traces: ApprovalProjection["traces"] } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "open" in value &&
+    typeof value.open === "boolean" &&
+    "traces" in value &&
+    Array.isArray(value.traces)
+  );
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);

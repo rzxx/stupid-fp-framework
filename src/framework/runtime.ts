@@ -64,6 +64,14 @@ export function createRuntime<
     }
 
     const envelope = projectionEnvelope(computed, trace);
+    if (trace) {
+      traces.add(trace, "stream", "projection streamed", {
+        projectionVersion: computed.projectionVersion,
+        observedResources: computed.regions.flatMap((region) =>
+          region.resources.map((resource) => resource.label),
+        ),
+      });
+    }
     await persistEnvelope(computed.session, envelope);
 
     return {
@@ -124,13 +132,6 @@ export function createRuntime<
     const projection = observed.value;
     const projectionVersion = sessions.bumpProjection(session);
     session.observedRegions = observed.regions;
-
-    if (trace) {
-      traces.add(trace, "stream", "projection streamed", {
-        projectionVersion,
-        observedResources: observed.observed.map((resource) => resource.label),
-      });
-    }
 
     return {
       session,
@@ -240,7 +241,7 @@ export function createRuntime<
 
         sessions.update(session, envelope.message as TSessionMessage);
         traces.add(trace, "session", `${envelope.message.type} applied`);
-        const projected = await project(session.sessionId, trace);
+        const projected = await patchSession(session.sessionId, trace);
         traces.complete(trace);
 
         return {
@@ -273,7 +274,7 @@ export function createRuntime<
       const projected =
         result.ok && result.invalidated.length > 0
           ? await refreshAffectedSessions(result.invalidated, trace)
-          : await project(session.sessionId, trace);
+          : { envelopes: [] };
 
       if (result.ok) {
         traces.complete(trace);
@@ -320,6 +321,23 @@ export function createRuntime<
     return envelope;
   }
 
+  async function patchSession(
+    sessionId: string,
+    trace: TraceSnapshot,
+  ): Promise<RuntimeResult<TProjection>> {
+    const computed = await computeProjection(sessionId, trace);
+
+    if ("error" in computed) {
+      return {
+        envelopes: [computed.error],
+      };
+    }
+
+    return {
+      envelopes: [await patchEnvelope(computed, computed.regions, trace)],
+    };
+  }
+
   async function refreshAffectedSessions(
     keys: readonly ResourceKey[],
     trace?: TraceSnapshot,
@@ -353,35 +371,45 @@ export function createRuntime<
 
       const invalidatedRegionIds = new Set(affectedSession.regions.map((region) => region.id));
       const regions = computed.regions.filter((region) => invalidatedRegionIds.has(region.id));
-      const patch: ServerEnvelope<TProjection, TraceSnapshot> = {
-        type: "projection:patch",
-        sessionId: affectedSession.sessionId,
-        cursor: "",
-        projectionVersion: computed.projectionVersion,
-        patch: {
-          kind: "region-values",
-          regions,
-        },
-        causedByTraceId: trace?.traceId,
-      };
-
-      await persistEnvelope(session, patch);
+      const patch = await patchEnvelope(computed, regions, trace);
       envelopes.push(patch);
-
-      if (trace) {
-        traces.add(trace, "stream", "region patch streamed", {
-          sessionId: affectedSession.sessionId,
-          projectionVersion: computed.projectionVersion,
-          regions: regions.map((region) => region.id),
-        });
-      }
-
-      const projection = projectionEnvelope(computed, trace);
-      await persistEnvelope(session, projection);
-      envelopes.push(projection);
     }
 
     return { envelopes };
+  }
+
+  async function patchEnvelope(
+    computed: {
+      session: Session<TSessionState>;
+      projectionVersion: number;
+      regions: ProjectionRegionSnapshot[];
+    },
+    regions: ProjectionRegionSnapshot[],
+    trace?: TraceSnapshot,
+  ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
+    const patch: ServerEnvelope<TProjection, TraceSnapshot> = {
+      type: "projection:patch",
+      sessionId: computed.session.sessionId,
+      cursor: "",
+      projectionVersion: computed.projectionVersion,
+      patch: {
+        kind: "region-values",
+        regions,
+      },
+      causedByTraceId: trace?.traceId,
+    };
+
+    await persistEnvelope(computed.session, patch);
+
+    if (trace) {
+      traces.add(trace, "stream", "region patch streamed", {
+        sessionId: computed.session.sessionId,
+        projectionVersion: computed.projectionVersion,
+        regions: regions.map((region) => region.id),
+      });
+    }
+
+    return patch;
   }
 
   async function resolveResume(

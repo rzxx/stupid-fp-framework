@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createApprovalRuntime } from "../src/demo/approvals/program";
 import { createApprovalServices } from "../src/demo/approvals/services";
 import type { ApprovalProjection } from "../src/demo/approvals/types";
-import type { ProjectionEnvelope } from "../src/framework";
+import type { ProjectionEnvelope, ProjectionPatchEnvelope } from "../src/framework";
 
 describe("deployment approval workflow", () => {
   test("approver can approve a pending deployment through the server program", async () => {
@@ -18,15 +18,27 @@ describe("deployment approval workflow", () => {
       sessionId: connected.sessionId,
       message: { type: "action.approveDeployment", deploymentId },
     });
-    const projection = latestProjection(result.envelopes);
+    const patch = latestPatch(result.envelopes);
     const actionResult = result.envelopes.find((envelope) => envelope.type === "action:result");
+    const pendingDeploymentsValue = patch.patch.regions.find(
+      (region) => region.id === "pendingDeployments",
+    )?.value;
+    const pendingDeployments = Array.isArray(pendingDeploymentsValue)
+      ? pendingDeploymentsValue
+      : [];
 
     expect(actionResult).toMatchObject({
       ok: true,
       result: { deploymentId, status: "approved" },
     });
     expect(
-      projection.projection.pendingDeployments.some((deployment) => deployment.id === deploymentId),
+      pendingDeployments.some(
+        (deployment) =>
+          deployment !== null &&
+          typeof deployment === "object" &&
+          "id" in deployment &&
+          deployment.id === deploymentId,
+      ),
     ).toBe(false);
     expect(services.deployments.find(deploymentId)?.status).toBe("approved");
     expect(
@@ -105,4 +117,18 @@ function latestProjection(
   }
 
   return projection;
+}
+
+function latestPatch(
+  envelopes: Awaited<ReturnType<ReturnType<typeof createApprovalRuntime>["connect"]>>["envelopes"],
+): ProjectionPatchEnvelope {
+  const patch = envelopes.find(
+    (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+  );
+
+  if (!patch) {
+    throw new Error("Expected projection patch envelope");
+  }
+
+  return patch;
 }

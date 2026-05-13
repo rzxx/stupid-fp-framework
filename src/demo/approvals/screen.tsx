@@ -29,6 +29,11 @@ export const approvalScreen: ScreenDefinition<
         )
       : null;
 
+    const tracePanel = await context.region("tracePanel", () => ({
+      open: session.state.tracePanelOpen,
+      traces: context.traces.list(),
+    }));
+
     return {
       route: "/teams/:teamId/deployments",
       team,
@@ -39,8 +44,8 @@ export const approvalScreen: ScreenDefinition<
       },
       pendingDeployments,
       selectedDeployment,
-      tracePanelOpen: session.state.tracePanelOpen,
-      traces: await context.region("tracePanel", () => context.traces.list()),
+      tracePanelOpen: tracePanel.open,
+      traces: tracePanel.traces,
     };
   },
 };

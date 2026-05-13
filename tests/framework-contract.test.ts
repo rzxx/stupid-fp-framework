@@ -74,13 +74,15 @@ describe("framework contract", () => {
 
     const envelope = latestProjection(result.envelopes);
     expect(envelope.cursor).toBeString();
-    expect(envelope.regions).toEqual([
-      {
-        id: "counter",
-        value: 0,
-        resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
-      },
-    ]);
+    expect(envelope.regions).toEqual(
+      expect.arrayContaining([
+        {
+          id: "counter",
+          value: 0,
+          resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
+        },
+      ]),
+    );
   });
 
   test("programs can route connections to one of multiple registered screens", async () => {
@@ -165,14 +167,14 @@ describe("framework contract", () => {
       message: { type: "session.toggle" },
     });
 
-    const projection = latestProjection(result.envelopes).projection;
+    const projection = applyCounterPatch(connected.projection, latestPatch(result.envelopes));
     const trace = latestTrace(result.envelopes).trace;
 
     expect(projection.selected).toBe(true);
     expect(projection.count).toBe(0);
     expect(trace.status).toBe("success");
     expect(trace.events.map((event) => event.label)).toContain("resources observed");
-    expect(trace.events.map((event) => event.label)).toContain("projection streamed");
+    expect(trace.events.map((event) => event.label)).toContain("region patch streamed");
   });
 
   test("unknown messages are rejected instead of being treated as session updates", async () => {
@@ -206,7 +208,7 @@ describe("framework contract", () => {
 
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
     const patch = latestPatch(result.envelopes);
-    const projection = latestProjection(result.envelopes).projection;
+    const projection = applyCounterPatch(connected.projection, patch);
     const trace = latestTrace(result.envelopes).trace;
 
     expect(action).toMatchObject({ ok: true, action: "increment" });
@@ -218,7 +220,6 @@ describe("framework contract", () => {
         resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
       },
     ]);
-    expect(applyCounterPatch(connected.projection, patch).count).toBe(2);
     expect(projection.count).toBe(2);
     expect(services.counter.writes).toEqual(["increment:2"]);
     expect(trace.status).toBe("success");
@@ -270,11 +271,12 @@ describe("framework contract", () => {
     });
 
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
-    const projection = latestProjection(result.envelopes).projection;
     const trace = latestTrace(result.envelopes).trace;
 
     expect(action).toMatchObject({ ok: false, error: "contract failure" });
-    expect(projection.count).toBe(0);
+    expect(result.envelopes.some((envelope) => envelope.type === "projection:update")).toBe(false);
+    expect(result.envelopes.some((envelope) => envelope.type === "projection:patch")).toBe(false);
+    expect(connected.projection.count).toBe(0);
     expect(services.counter.writes).toEqual([]);
     expect(trace.status).toBe("error");
   });
@@ -320,7 +322,10 @@ describe("framework contract", () => {
       message: { type: "session.toggle" },
     });
 
-    const secondProjection = latestProjection(secondResult.envelopes).projection;
+    const secondProjection = applyCounterPatch(
+      second.projection,
+      latestPatch(secondResult.envelopes),
+    );
     expect(secondProjection.traceIds).not.toContain(firstTraceId);
   });
 
@@ -342,7 +347,7 @@ describe("framework contract", () => {
     ]);
   });
 
-  test("external resource invalidation fans out patches and projections to affected sessions", async () => {
+  test("external resource invalidation fans out patches to affected sessions", async () => {
     const services = createServices();
     const runtime = createCounterRuntime(services);
     const first = await connect(runtime);
@@ -354,15 +359,14 @@ describe("framework contract", () => {
     const patches = result.envelopes.filter(
       (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
     );
-    const projections = result.envelopes.filter(
-      (envelope): envelope is ProjectionEnvelope<Projection> =>
-        envelope.type === "projection:update",
-    );
 
     expect(patches.map((patch) => patch.sessionId).sort()).toEqual(
       [first.sessionId, second.sessionId].sort(),
     );
-    expect(projections.map((projection) => projection.projection.count)).toEqual([7, 7]);
+    expect(patches.map((patch) => applyCounterPatch(first.projection, patch).count)).toEqual([
+      7, 7,
+    ]);
+    expect(result.envelopes.some((envelope) => envelope.type === "projection:update")).toBe(false);
   });
 
   test("memory store can resume session state with a fresh runtime projection", async () => {
@@ -398,7 +402,7 @@ describe("framework contract", () => {
       sessionId: connected.sessionId,
       message: { type: "session.toggle" },
     });
-    const earlierCursor = latestProjection(updated.envelopes).cursor;
+    const earlierCursor = latestPatch(updated.envelopes).cursor;
 
     await firstRuntime.receive({
       type: "message",
@@ -546,11 +550,13 @@ function createCounterRuntime(
       project: async (session, context) => ({
         route: session.route,
         params: session.params,
-        selected: session.state.selected,
+        selected: await context.region("selected", () => session.state.selected),
         count: await context.region("counter", () =>
           context.resources.read(context.services, counterKey),
         ),
-        traceIds: context.traces.list().map((trace) => trace.traceId),
+        traceIds: await context.region("traceIds", () =>
+          context.traces.list().map((trace) => trace.traceId),
+        ),
       }),
     },
     actions: [
@@ -750,11 +756,25 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Proj
 }
 
 function applyCounterPatch(projection: Projection, patch: ProjectionPatchEnvelope): Projection {
-  const counterRegion = patch.patch.regions.find((region) => region.id === "counter");
+  return patch.patch.regions.reduce((current, region) => {
+    if (region.id === "counter" && typeof region.value === "number") {
+      return { ...current, count: region.value };
+    }
 
-  return typeof counterRegion?.value === "number"
-    ? { ...projection, count: counterRegion.value }
-    : projection;
+    if (region.id === "selected" && typeof region.value === "boolean") {
+      return { ...current, selected: region.value };
+    }
+
+    if (
+      region.id === "traceIds" &&
+      Array.isArray(region.value) &&
+      region.value.every((value) => typeof value === "string")
+    ) {
+      return { ...current, traceIds: region.value };
+    }
+
+    return current;
+  }, projection);
 }
 
 function isMessage(value: unknown): value is { type: string } {
