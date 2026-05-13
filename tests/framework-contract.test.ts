@@ -19,6 +19,7 @@ import {
   type ServerEnvelope,
   type TraceEnvelope,
   type TraceSnapshot,
+  TraceStore,
 } from "../src/framework";
 
 type Services = {
@@ -288,6 +289,24 @@ describe("framework contract", () => {
 
     const secondProjection = latestProjection(secondResult.envelopes).projection;
     expect(secondProjection.traceIds).not.toContain(firstTraceId);
+  });
+
+  test("trace store keeps dev-only events out of browser snapshots", () => {
+    const traces = new TraceStore();
+    const trace = traces.start("contract", { scopeId: "session-1" });
+
+    traces.add(trace, "message", "browser event");
+    traces.add(trace, "auth", "dev credential detail", { token: "secret" }, { visibility: "dev" });
+
+    expect(traces.list("session-1")).toEqual([
+      expect.objectContaining({
+        events: [expect.objectContaining({ label: "browser event" })],
+      }),
+    ]);
+    expect(traces.list("session-1", "dev")[0]?.events.map((event) => event.label)).toEqual([
+      "browser event",
+      "dev credential detail",
+    ]);
   });
 
   test("external resource invalidation fans out patches and projections to affected sessions", async () => {

@@ -264,7 +264,7 @@ export function createRuntime<
       type: "trace:update",
       sessionId: session.sessionId,
       cursor: "",
-      trace,
+      trace: traces.snapshot(trace, "browser"),
     };
     await persistEnvelope(session, envelope);
     return envelope;

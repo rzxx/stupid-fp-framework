@@ -35,6 +35,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Region metadata now drives `projection:patch` envelopes and `runtime.invalidate()` fanout; full projections remain the fallback payload.
 - Bun host plumbing lives behind `serveBunProgram`; the approval demo server now only wires app-specific files and runtime options.
 - React stream lifecycle now has a reusable `useProgramStream` hook; the approval app renders from that adapter instead of owning socket plumbing.
+- Trace events now have browser/dev visibility, and stream/projection readers expose browser-safe snapshots by default.
 
 ## Progress
 
@@ -45,6 +46,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Stage 5 done: added region patch envelopes, external invalidation fanout, and trace linkage for invalidated regions.
 - Stage 6 done: extracted a Bun host adapter and shrank `src/server.ts` to demo configuration.
 - Stage 7 done: added a React adapter hook and moved approval UI stream state onto it.
+- Stage 8 done: added trace visibility policy and coverage for dev-only trace filtering.
 
 ## Skips
 
