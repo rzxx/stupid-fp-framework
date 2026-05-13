@@ -4,6 +4,7 @@ import type {
   ErrorEnvelope,
   ProjectionPatchEnvelope,
   ProjectionEnvelope,
+  ResumeResult,
   ServerEnvelope,
   TraceEnvelope,
 } from "../framework";
@@ -12,7 +13,7 @@ export type ConnectionState = "connecting" | "open" | "closed" | "error";
 
 export type ProgramStreamHandlers<TProjection, TTrace> = {
   onConnectionState: (state: ConnectionState) => void;
-  onSession: (sessionId: string, resumed: boolean) => void;
+  onSession: (sessionId: string, resumed: boolean, resume: ResumeResult) => void;
   onProjection: (envelope: ProjectionEnvelope<TProjection>) => void;
   onPatch?: (envelope: ProjectionPatchEnvelope) => void;
   onTrace: (envelope: TraceEnvelope<TTrace>) => void;
@@ -71,7 +72,7 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
 
     if (envelope.type === "connected") {
       sessionId = envelope.sessionId;
-      options.handlers.onSession(envelope.sessionId, envelope.resumed);
+      options.handlers.onSession(envelope.sessionId, envelope.resumed, envelope.resume);
       return;
     }
 

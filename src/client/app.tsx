@@ -1,55 +1,27 @@
 import { createRoot } from "react-dom/client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionResultEnvelope, ErrorEnvelope, TraceSnapshot } from "../framework";
-import type { ApprovalProjection } from "../demo/approvals/types";
-import {
-  connectApprovalStream,
-  type ApprovalStreamClient,
-  type ConnectionState,
-} from "./stream-client";
+import { useMemo, useState } from "react";
+import type { TraceSnapshot } from "../framework";
+import type { ApprovalClientMessage, ApprovalProjection } from "../demo/approvals/types";
+import { useProgramStream, type ProgramStreamReactOptions } from "./react-adapter";
 
 function App() {
-  const stream = useRef<ApprovalStreamClient | null>(null);
-  const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [resumed, setResumed] = useState(false);
-  const [projection, setProjection] = useState<ApprovalProjection | null>(null);
-  const [projectionVersion, setProjectionVersion] = useState(0);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [traces, setTraces] = useState<TraceSnapshot[]>([]);
-  const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
-  const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
   const [deploymentFilter, setDeploymentFilter] = useState("");
-
-  useEffect(() => {
-    stream.current = connectApprovalStream({
-      onConnectionState: setConnection,
-      onSession(nextSessionId, nextResumed) {
-        setSessionId(nextSessionId);
-        setResumed(nextResumed);
-      },
-      onProjection(envelope) {
-        setProjection(envelope.projection);
-        setProjectionVersion(envelope.projectionVersion);
-        setCursor(envelope.cursor);
-        setTraces(envelope.projection.traces);
-      },
-      onTrace(envelope) {
-        setCursor(envelope.cursor);
-        setTraces((current) => mergeTrace(current, envelope.trace));
-      },
-      onActionResult(envelope) {
-        setCursor(envelope.cursor);
-        setLastResult(envelope);
-      },
-      onError: setLastError,
-    });
-
-    return () => stream.current?.close();
+  const streamOptions = useMemo<
+    ProgramStreamReactOptions<ApprovalProjection, TraceSnapshot>
+  >(() => {
+    return {
+      route: "/teams/:teamId/deployments",
+      params: { teamId: "team-platform" },
+      storageKey: "approval-stream",
+      projectionTraces: (projection) => projection.traces,
+    };
   }, []);
+  const stream = useProgramStream<ApprovalClientMessage, ApprovalProjection, TraceSnapshot>(
+    streamOptions,
+  );
 
-  const selectedId = projection?.selectedDeployment?.id ?? null;
-  const selectedIsPending = projection?.selectedDeployment?.status === "pending";
+  const selectedId = stream.projection?.selectedDeployment?.id ?? null;
+  const selectedIsPending = stream.projection?.selectedDeployment?.status === "pending";
 
   return (
     <main className="app-shell">
@@ -59,54 +31,54 @@ function App() {
           <h1>Deployment approvals</h1>
         </div>
         <div className="status-strip">
-          <span data-state={connection}>{connection}</span>
-          <span>{sessionId ?? "no session"}</span>
-          <span>{resumed ? "resumed" : "fresh"}</span>
-          <span>{cursor ?? "no cursor"}</span>
-          <span>projection v{projectionVersion}</span>
+          <span data-state={stream.connection}>{stream.connection}</span>
+          <span>{stream.sessionId ?? "no session"}</span>
+          <span>{stream.resume?.status ?? (stream.resumed ? "resumed" : "fresh")}</span>
+          <span>{stream.cursor ?? "no cursor"}</span>
+          <span>projection v{stream.projectionVersion}</span>
         </div>
       </header>
 
-      {lastError ? <Banner tone="error" text={lastError.message} /> : null}
-      {lastResult ? (
+      {stream.lastError ? <Banner tone="error" text={stream.lastError.message} /> : null}
+      {stream.lastResult ? (
         <Banner
-          tone={lastResult.ok ? "success" : "error"}
+          tone={stream.lastResult.ok ? "success" : "error"}
           text={
-            lastResult.ok
+            stream.lastResult.ok
               ? "Approval action completed on the server."
-              : (lastResult.error ?? "Action failed.")
+              : (stream.lastResult.error ?? "Action failed.")
           }
         />
       ) : null}
 
-      {projection ? (
+      {stream.projection ? (
         <section className="workspace">
           <DeploymentList
             filter={deploymentFilter}
             onFilter={setDeploymentFilter}
-            projection={projection}
+            projection={stream.projection}
             selectedId={selectedId}
             onSelect={(deploymentId) =>
-              stream.current?.send({
+              stream.send({
                 type: "session.selectDeployment",
                 deploymentId,
               })
             }
           />
           <DetailPanel
-            projection={projection}
+            projection={stream.projection}
             canApprove={selectedIsPending}
             onApprove={(deploymentId) =>
-              stream.current?.send({
+              stream.send({
                 type: "action.approveDeployment",
                 deploymentId,
               })
             }
           />
           <TracePanel
-            projection={projection}
-            traces={traces}
-            onToggle={() => stream.current?.send({ type: "session.toggleTracePanel" })}
+            projection={stream.projection}
+            traces={stream.traces}
+            onToggle={() => stream.send({ type: "session.toggleTracePanel" })}
           />
         </section>
       ) : (
@@ -265,11 +237,6 @@ function formatTime(value: string): string {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(value));
-}
-
-function mergeTrace(current: TraceSnapshot[], next: TraceSnapshot): TraceSnapshot[] {
-  const withoutNext = current.filter((trace) => trace.traceId !== next.traceId);
-  return [next, ...withoutNext];
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);

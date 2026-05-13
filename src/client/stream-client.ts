@@ -2,6 +2,7 @@ import type {
   ActionResultEnvelope,
   ErrorEnvelope,
   ProjectionEnvelope,
+  ResumeResult,
   TraceEnvelope,
 } from "../framework";
 import type { ApprovalClientMessage, ApprovalProjection } from "../demo/approvals/types";
@@ -11,7 +12,7 @@ export type { ConnectionState } from "./program-stream";
 
 export type ApprovalStreamHandlers = {
   onConnectionState: (state: ConnectionState) => void;
-  onSession: (sessionId: string, resumed: boolean) => void;
+  onSession: (sessionId: string, resumed: boolean, resume: ResumeResult) => void;
   onProjection: (envelope: ProjectionEnvelope<ApprovalProjection>) => void;
   onTrace: (envelope: TraceEnvelope<ApprovalProjection["traces"][number]>) => void;
   onActionResult: (envelope: ActionResultEnvelope) => void;
