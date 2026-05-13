@@ -60,7 +60,7 @@ export const Session = {
   define: defineSession,
 };
 
-export class SessionStore<TState, TMessage> {
+export class LiveSessionRegistry<TState, TMessage> {
   readonly #definition: SessionDefinition<TState, TMessage>;
   readonly #sessions = new Map<string, Session<TState>>();
   #nextId = 1;
@@ -141,6 +141,8 @@ export class SessionStore<TState, TMessage> {
     this.#nextId = Math.max(this.#nextId, Number(match[1]) + 1);
   }
 }
+
+export { LiveSessionRegistry as SessionStore };
 
 export type SessionSnapshot<TState> = {
   snapshotVersion: number;

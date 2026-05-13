@@ -52,7 +52,14 @@ export function defineProgram<
   const plugins = definition.plugins ?? [];
   const resourceGraph = new ResourceGraph<R>(resourceHooks(plugins));
   const screens = normalizeScreens(definition);
-  const layer = definition.layer ?? (Layer.empty as Layer.Layer<R>);
+  const baseLayer = definition.layer ?? (Layer.empty as Layer.Layer<R>);
+  const layer =
+    plugins.length === 0
+      ? baseLayer
+      : (Layer.mergeAll(
+          baseLayer,
+          ...plugins.map((plugin) => plugin.layer).filter((layer) => layer !== undefined),
+        ) as Layer.Layer<R>);
 
   for (const resource of definition.resources) {
     resourceGraph.register(resource);

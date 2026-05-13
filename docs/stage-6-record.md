@@ -14,8 +14,10 @@ React adapter state surface.
 - Actions and sessions now have schema-backed builder APIs while lower-level object manifests remain available.
 - Screens can use first-class route definitions with decoded params.
 - Plugins are ordinary TypeScript values with Effectful hooks for actions, resources, routes, sessions, traces, hosts, and renderers.
+- Plugin `Layer`s are merged into the program runtime alongside the app layer.
 - Runtime stores now expose capability metadata and typed store failures; JSON corruption is reported as `RuntimeStoreError`.
 - Session snapshots now carry snapshot version metadata.
+- The process-local active session map is now named `LiveSessionRegistry`; durable session state remains the runtime store contract.
 - React adapter code lives under `src/adapters/react`; approval UI and CSS live under `src/demo/approvals/client`.
 - `useProgramStream` now returns grouped connection/session/projection/action/error/diagnostic state instead of a flat bag.
 
@@ -27,5 +29,5 @@ React adapter state surface.
 ## Remaining Follow-Ups
 
 - Production persistence adapters are still intentionally unchosen; Memory and JSON remain development adapters.
-- Plugin layers are represented in the plugin shape, but no production integration package model exists yet.
+- No production integration package model exists yet; plugins are still local TypeScript values.
 - Renderer/UI-tree and Flight-style adapters remain deferred; Stage 6 only preserved adapter boundaries.

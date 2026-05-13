@@ -17,7 +17,7 @@ import {
   type ResumeResult,
   type ServerEnvelope,
 } from "./stream";
-import { SessionStore, type Session, type SessionSnapshot } from "./session";
+import { LiveSessionRegistry, type Session, type SessionSnapshot } from "./session";
 import { TraceStore, type TraceSnapshot } from "./trace";
 
 export type RuntimeResult<TProjection> = {
@@ -59,7 +59,7 @@ export function createRuntime<
   program: Program<R, TSessionState, TSessionMessage, TActionMessage, TProjection>,
   options?: RuntimeOptions<TSessionState, TProjection>,
 ): Runtime<TSessionMessage, TActionMessage, TProjection> {
-  const sessions = new SessionStore(program.session);
+  const sessions = new LiveSessionRegistry(program.session);
   const traces = new TraceStore();
   const actionPluginHooks = actionHooks(program.plugins);
   const resourcePluginHooks = resourceHooks(program.plugins);
