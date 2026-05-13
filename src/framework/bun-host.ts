@@ -26,6 +26,7 @@ export async function serveBunProgram<TMessage, TProjection, TTrace>(
 ): Promise<Bun.Server<unknown>> {
   const outdir = options.outdir ?? join(options.rootDir, "..", "dist");
   const clientOut = join(outdir, "app.js");
+  const delivery = new SocketDelivery<TProjection, TTrace>();
 
   await buildClient(options.clientEntry, outdir);
 
@@ -72,7 +73,10 @@ export async function serveBunProgram<TMessage, TProjection, TTrace>(
             ? await options.runtime.connect(parsed)
             : await options.runtime.receive(parsed);
 
-        sendAll(socket, result.envelopes);
+        delivery.send(socket, result.envelopes);
+      },
+      close(socket) {
+        delivery.close(socket);
       },
     },
   });
@@ -99,11 +103,64 @@ async function buildClient(entrypoint: string, outdir: string): Promise<void> {
   }
 }
 
-function sendAll<TProjection, TTrace>(
-  socket: Bun.ServerWebSocket<unknown>,
-  envelopes: ServerEnvelope<TProjection, TTrace>[],
-): void {
-  for (const envelope of envelopes) {
-    socket.send(JSON.stringify(envelope));
+class SocketDelivery<TProjection, TTrace> {
+  readonly #sessionSockets = new Map<string, Set<Bun.ServerWebSocket<unknown>>>();
+  readonly #socketSession = new WeakMap<Bun.ServerWebSocket<unknown>, string>();
+
+  send(
+    current: Bun.ServerWebSocket<unknown>,
+    envelopes: ServerEnvelope<TProjection, TTrace>[],
+  ): void {
+    for (const envelope of envelopes) {
+      if (envelope.type === "connected") {
+        this.#attach(current, envelope.sessionId);
+        current.send(JSON.stringify(envelope));
+        continue;
+      }
+
+      if ("sessionId" in envelope && envelope.sessionId) {
+        const sockets = this.#sessionSockets.get(envelope.sessionId);
+
+        if (sockets && sockets.size > 0) {
+          for (const socket of sockets) {
+            socket.send(JSON.stringify(envelope));
+          }
+
+          continue;
+        }
+      }
+
+      current.send(JSON.stringify(envelope));
+    }
+  }
+
+  close(socket: Bun.ServerWebSocket<unknown>): void {
+    const sessionId = this.#socketSession.get(socket);
+
+    if (!sessionId) {
+      return;
+    }
+
+    this.#socketSession.delete(socket);
+    const sockets = this.#sessionSockets.get(sessionId);
+    sockets?.delete(socket);
+
+    if (sockets?.size === 0) {
+      this.#sessionSockets.delete(sessionId);
+    }
+  }
+
+  #attach(socket: Bun.ServerWebSocket<unknown>, sessionId: string): void {
+    this.close(socket);
+
+    let sockets = this.#sessionSockets.get(sessionId);
+
+    if (!sockets) {
+      sockets = new Set();
+      this.#sessionSockets.set(sessionId, sockets);
+    }
+
+    sockets.add(socket);
+    this.#socketSession.set(socket, sessionId);
   }
 }
