@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActionResultEnvelope, ErrorEnvelope } from "../framework";
+import type { ActionResultEnvelope, ErrorEnvelope, TraceSnapshot } from "../framework";
 import type { ApprovalProjection } from "../demo/approvals/types";
 import {
   connectApprovalStream,
@@ -14,6 +14,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [projection, setProjection] = useState<ApprovalProjection | null>(null);
   const [projectionVersion, setProjectionVersion] = useState(0);
+  const [traces, setTraces] = useState<TraceSnapshot[]>([]);
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
 
@@ -24,10 +25,10 @@ function App() {
       onProjection(envelope) {
         setProjection(envelope.projection);
         setProjectionVersion(envelope.projectionVersion);
+        setTraces(envelope.projection.traces);
       },
-      onTrace() {
-        // Traces are included in the server projection; this event exists so the
-        // stream can grow without changing the client contract.
+      onTrace(envelope) {
+        setTraces((current) => mergeTrace(current, envelope.trace));
       },
       onActionResult: setLastResult,
       onError: setLastError,
@@ -89,6 +90,7 @@ function App() {
           />
           <TracePanel
             projection={projection}
+            traces={traces}
             onToggle={() => stream.current?.send({ type: "session.toggleTracePanel" })}
           />
         </section>
@@ -183,8 +185,12 @@ function DetailPanel(props: {
   );
 }
 
-function TracePanel(props: { projection: ApprovalProjection; onToggle: () => void }) {
-  const traces = useMemo(() => props.projection.traces.slice(0, 5), [props.projection.traces]);
+function TracePanel(props: {
+  projection: ApprovalProjection;
+  traces: TraceSnapshot[];
+  onToggle: () => void;
+}) {
+  const traces = useMemo(() => props.traces.slice(0, 5), [props.traces]);
 
   return (
     <section className="panel trace-panel">
@@ -227,6 +233,11 @@ function formatTime(value: string): string {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(value));
+}
+
+function mergeTrace(current: TraceSnapshot[], next: TraceSnapshot): TraceSnapshot[] {
+  const withoutNext = current.filter((trace) => trace.traceId !== next.traceId);
+  return [next, ...withoutNext];
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);
