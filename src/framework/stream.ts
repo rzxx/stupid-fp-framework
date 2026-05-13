@@ -2,7 +2,10 @@ export type ConnectEnvelope = {
   type: "connect";
   route: string;
   params: Record<string, string>;
-  resumeCursor?: string;
+  resume?: {
+    sessionId: string;
+    cursor: string;
+  };
 };
 
 export type ClientMessageEnvelope<TMessage> = {
@@ -16,18 +19,31 @@ export type ClientEnvelope<TMessage> = ConnectEnvelope | ClientMessageEnvelope<T
 export type ConnectedEnvelope = {
   type: "connected";
   sessionId: string;
+  cursor: string;
+  resumed: boolean;
 };
 
 export type ProjectionEnvelope<TProjection> = {
   type: "projection:update";
   sessionId: string;
+  cursor: string;
   projectionVersion: number;
   projection: TProjection;
+  regions: {
+    id: string;
+    resources: {
+      type: string;
+      id: string;
+      label: string;
+    }[];
+  }[];
+  causedByTraceId?: string;
 };
 
 export type ActionResultEnvelope = {
   type: "action:result";
   sessionId: string;
+  cursor: string;
   traceId: string;
   action: string;
   ok: boolean;
@@ -37,6 +53,7 @@ export type ActionResultEnvelope = {
 export type TraceEnvelope<TTrace> = {
   type: "trace:update";
   sessionId: string;
+  cursor: string;
   trace: TTrace;
 };
 
@@ -65,6 +82,10 @@ export function parseClientEnvelope<TMessage>(
         return { type: "error", message: "Invalid connect envelope" };
       }
 
+      if (value.resume !== undefined && !isResume(value.resume)) {
+        return { type: "error", message: "Invalid resume envelope" };
+      }
+
       return value as ConnectEnvelope;
     }
 
@@ -80,6 +101,15 @@ export function parseClientEnvelope<TMessage>(
   } catch {
     return { type: "error", message: "Malformed JSON envelope" };
   }
+}
+
+function isResume(value: unknown): value is ConnectEnvelope["resume"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const resume = value as Record<string, unknown>;
+  return typeof resume.sessionId === "string" && typeof resume.cursor === "string";
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

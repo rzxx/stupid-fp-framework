@@ -1,12 +1,19 @@
 import { executeAction } from "./action";
 import type { Program } from "./program";
-import { serializeResourceKey } from "./resource";
+import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
+import type { ProjectionRegionSnapshot } from "./projection";
+import { MemoryRuntimeStore, type RuntimeStore } from "./store";
 import { type ClientEnvelope, type ServerEnvelope } from "./stream";
-import { SessionStore } from "./session";
+import { SessionStore, type Session } from "./session";
 import { TraceStore, type TraceSnapshot } from "./trace";
 
 export type RuntimeResult<TProjection> = {
   envelopes: ServerEnvelope<TProjection, TraceSnapshot>[];
+};
+
+export type AffectedRegion = {
+  sessionId: string;
+  regions: ProjectionRegionSnapshot[];
 };
 
 export type Runtime<
@@ -21,6 +28,11 @@ export type Runtime<
     envelope: Extract<ClientEnvelope<TSessionMessage | TActionMessage>, { type: "message" }>,
   ) => Promise<RuntimeResult<TProjection>>;
   traces: TraceStore;
+  affectedRegions: (keys: readonly ResourceKey[]) => AffectedRegion[];
+};
+
+export type RuntimeOptions<TSessionState, TProjection> = {
+  store?: RuntimeStore<TSessionState, TProjection, TraceSnapshot>;
 };
 
 export function createRuntime<
@@ -31,9 +43,12 @@ export function createRuntime<
   TProjection,
 >(
   program: Program<TServices, TSessionState, TSessionMessage, TActionMessage, TProjection>,
+  options?: RuntimeOptions<TSessionState, TProjection>,
 ): Runtime<TSessionMessage, TActionMessage, TProjection> {
   const sessions = new SessionStore(program.session);
   const traces = new TraceStore();
+  const store =
+    options?.store ?? new MemoryRuntimeStore<TSessionState, TProjection, TraceSnapshot>();
 
   async function project(
     sessionId: string,
@@ -52,6 +67,7 @@ export function createRuntime<
         services: program.services,
         resources: program.resourceGraph,
         traces: traces.scoped(sessionId),
+        region: (id, read) => program.resourceGraph.region(id, read),
       }),
     );
 
@@ -64,6 +80,7 @@ export function createRuntime<
 
     const projection = observed.value;
     const projectionVersion = sessions.bumpProjection(session);
+    session.observedRegions = observed.regions;
 
     if (trace) {
       traces.add(trace, "stream", "projection streamed", {
@@ -72,27 +89,45 @@ export function createRuntime<
       });
     }
 
+    const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
+      type: "projection:update",
+      sessionId,
+      cursor: "",
+      projectionVersion,
+      projection,
+      regions: observed.regions,
+      causedByTraceId: trace?.traceId,
+    };
+
+    await persistEnvelope(session, envelope);
+
     return {
-      envelopes: [
-        {
-          type: "projection:update",
-          sessionId,
-          projectionVersion,
-          projection,
-        },
-      ],
+      envelopes: [envelope],
     };
   }
 
   return {
     traces,
+    affectedRegions(keys) {
+      return affectedRegions(sessions.list(), keys);
+    },
 
     async connect(envelope) {
-      const session = sessions.create(envelope.route, envelope.params);
+      const restored = envelope.resume ? await store.loadSession(envelope.resume.sessionId) : null;
+      const session = restored
+        ? sessions.restore(restored)
+        : sessions.create(envelope.route, envelope.params);
+      const connected: ServerEnvelope<TProjection, TraceSnapshot> = {
+        type: "connected",
+        sessionId: session.sessionId,
+        cursor: "",
+        resumed: Boolean(restored),
+      };
+      await persistEnvelope(session, connected);
       const initial = await project(session.sessionId);
 
       return {
-        envelopes: [{ type: "connected", sessionId: session.sessionId }, ...initial.envelopes],
+        envelopes: [connected, ...initial.envelopes],
       };
     },
 
@@ -127,10 +162,7 @@ export function createRuntime<
         traces.complete(trace);
 
         return {
-          envelopes: [
-            ...projected.envelopes,
-            { type: "trace:update", sessionId: session.sessionId, trace },
-          ],
+          envelopes: [...projected.envelopes, await traceEnvelope(session, trace)],
         };
       }
 
@@ -147,6 +179,16 @@ export function createRuntime<
       traces.add(trace, "resource", "resources invalidated", {
         resources: result.invalidated.map((key) => serializeResourceKey(key).label),
       });
+      const actionResult: ServerEnvelope<TProjection, TraceSnapshot> = {
+        type: "action:result",
+        sessionId: session.sessionId,
+        cursor: "",
+        traceId: trace.traceId,
+        action: envelope.message.type.replace(/^action\./, ""),
+        ok: result.ok,
+        error: result.error,
+      };
+      await persistEnvelope(session, actionResult);
       const projected = await project(session.sessionId, trace);
 
       if (result.ok) {
@@ -154,19 +196,62 @@ export function createRuntime<
       }
 
       return {
-        envelopes: [
-          {
-            type: "action:result",
-            sessionId: session.sessionId,
-            traceId: trace.traceId,
-            action: envelope.message.type.replace(/^action\./, ""),
-            ok: result.ok,
-            error: result.error,
-          },
-          ...projected.envelopes,
-          { type: "trace:update", sessionId: session.sessionId, trace },
-        ],
+        envelopes: [actionResult, ...projected.envelopes, await traceEnvelope(session, trace)],
       };
     },
   };
+
+  async function persistEnvelope(
+    session: Session<TSessionState>,
+    envelope: ServerEnvelope<TProjection, TraceSnapshot>,
+  ): Promise<void> {
+    const cursor = await store.nextCursor();
+
+    if (
+      envelope.type === "connected" ||
+      envelope.type === "projection:update" ||
+      envelope.type === "action:result" ||
+      envelope.type === "trace:update"
+    ) {
+      envelope.cursor = cursor;
+    }
+
+    session.cursor = cursor;
+    await store.appendEnvelope(session.sessionId, cursor, envelope);
+    await store.saveSession(sessions.snapshot(session));
+  }
+
+  async function traceEnvelope(
+    session: Session<TSessionState>,
+    trace: TraceSnapshot,
+  ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
+    const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
+      type: "trace:update",
+      sessionId: session.sessionId,
+      cursor: "",
+      trace,
+    };
+    await persistEnvelope(session, envelope);
+    return envelope;
+  }
+}
+
+function affectedRegions(
+  sessions: { sessionId: string; observedRegions: ProjectionRegionSnapshot[] }[],
+  keys: readonly ResourceKey[],
+): AffectedRegion[] {
+  const invalidated = new Set(keys.map(resourceKeyId));
+  const affected: AffectedRegion[] = [];
+
+  for (const session of sessions) {
+    const regions = session.observedRegions.filter((region) =>
+      region.resources.some((resource) => invalidated.has(`${resource.type}:${resource.id}`)),
+    );
+
+    if (regions.length > 0) {
+      affected.push({ sessionId: session.sessionId, regions });
+    }
+  }
+
+  return affected;
 }

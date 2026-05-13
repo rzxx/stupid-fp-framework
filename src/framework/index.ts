@@ -6,5 +6,6 @@ export * from "./projection";
 export * from "./resource";
 export * from "./runtime";
 export * from "./session";
+export * from "./store";
 export * from "./stream";
 export * from "./trace";

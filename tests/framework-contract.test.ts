@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   actionFailure,
   createRuntime,
@@ -6,9 +8,12 @@ import {
   defineProgram,
   defineResource,
   Effect,
+  JsonFileRuntimeStore,
+  MemoryRuntimeStore,
   parseClientEnvelope,
   resourceKey,
   type ProjectionEnvelope,
+  type RuntimeStore,
   type ServerEnvelope,
   type TraceEnvelope,
   type TraceSnapshot,
@@ -63,6 +68,32 @@ describe("framework contract", () => {
     expect(projection.route).toBe("/arbitrary/:id");
     expect(projection.params).toEqual({ id: "main", mode: "contract" });
     expect(projection.count).toBe(0);
+
+    const envelope = latestProjection(result.envelopes);
+    expect(envelope.cursor).toBeString();
+    expect(envelope.regions).toEqual([
+      {
+        id: "counter",
+        resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
+      },
+    ]);
+  });
+
+  test("invalidated resources map back to observed projection regions", async () => {
+    const runtime = createCounterRuntime();
+    const connected = await connect(runtime);
+
+    expect(runtime.affectedRegions([counterKey])).toEqual([
+      {
+        sessionId: connected.sessionId,
+        regions: [
+          {
+            id: "counter",
+            resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
+          },
+        ],
+      },
+    ]);
   });
 
   test("session messages change ephemeral session state without changing durable resources", async () => {
@@ -166,6 +197,18 @@ describe("framework contract", () => {
     expect(secondProjection.traceIds).not.toContain(firstTraceId);
   });
 
+  test("memory store can resume session state with a fresh runtime projection", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    await assertResumeRestoresSession(store);
+  });
+
+  test("JSON file store can resume session state with a fresh runtime projection", async () => {
+    const store = new JsonFileRuntimeStore<SessionState, Projection>(
+      join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
+    );
+    await assertResumeRestoresSession(store);
+  });
+
   test("stream parser rejects params that are not string records", () => {
     expect(
       parseClientEnvelope(
@@ -188,7 +231,10 @@ function createServices(): Services {
   };
 }
 
-function createCounterRuntime(services = createServices()) {
+function createCounterRuntime(
+  services = createServices(),
+  store?: RuntimeStore<SessionState, Projection>,
+) {
   const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
     services,
     resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
@@ -208,7 +254,9 @@ function createCounterRuntime(services = createServices()) {
         route: session.route,
         params: session.params,
         selected: session.state.selected,
-        count: await context.resources.read(context.services, counterKey),
+        count: await context.region("counter", () =>
+          context.resources.read(context.services, counterKey),
+        ),
         traceIds: context.traces.list().map((trace) => trace.traceId),
       }),
     },
@@ -228,7 +276,7 @@ function createCounterRuntime(services = createServices()) {
     ],
   });
 
-  return createRuntime(program);
+  return createRuntime(program, { store });
 }
 
 async function connect(runtime: ReturnType<typeof createCounterRuntime>) {
@@ -272,4 +320,35 @@ function latestTrace(
   }
 
   return trace;
+}
+
+async function assertResumeRestoresSession(store: RuntimeStore<SessionState, Projection>) {
+  const services = createServices();
+  const firstRuntime = createCounterRuntime(services, store);
+  const connected = await connect(firstRuntime);
+
+  const updated = await firstRuntime.receive({
+    type: "message",
+    sessionId: connected.sessionId,
+    message: { type: "session.toggle" },
+  });
+  const resumeCursor = latestTrace(updated.envelopes).cursor;
+
+  const resumedRuntime = createCounterRuntime(services, store);
+  const resumed = await resumedRuntime.connect({
+    type: "connect",
+    route: "/contract/:id",
+    params: { id: "main" },
+    resume: {
+      sessionId: connected.sessionId,
+      cursor: resumeCursor,
+    },
+  });
+
+  expect(resumed.envelopes[0]).toMatchObject({
+    type: "connected",
+    sessionId: connected.sessionId,
+    resumed: true,
+  });
+  expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
 }

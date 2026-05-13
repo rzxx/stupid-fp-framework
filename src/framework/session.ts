@@ -1,9 +1,13 @@
+import type { ProjectionRegionSnapshot } from "./projection";
+
 export type Session<TState> = {
   sessionId: string;
   route: string;
   params: Record<string, string>;
   state: TState;
   projectionVersion: number;
+  cursor: string | null;
+  observedRegions: ProjectionRegionSnapshot[];
 };
 
 export type SessionDefinition<TState, TMessage> = {
@@ -27,6 +31,8 @@ export class SessionStore<TState, TMessage> {
       params,
       state: this.#definition.init(),
       projectionVersion: 0,
+      cursor: null,
+      observedRegions: [],
     };
 
     this.#sessions.set(session.sessionId, session);
@@ -35,6 +41,26 @@ export class SessionStore<TState, TMessage> {
 
   get(sessionId: string): Session<TState> | undefined {
     return this.#sessions.get(sessionId);
+  }
+
+  list(): Session<TState>[] {
+    return [...this.#sessions.values()];
+  }
+
+  restore(snapshot: SessionSnapshot<TState>): Session<TState> {
+    const session: Session<TState> = {
+      sessionId: snapshot.sessionId,
+      route: snapshot.route,
+      params: snapshot.params,
+      state: snapshot.state,
+      projectionVersion: snapshot.projectionVersion,
+      cursor: snapshot.cursor,
+      observedRegions: snapshot.observedRegions,
+    };
+
+    this.#sessions.set(session.sessionId, session);
+    this.#advanceNextId(session.sessionId);
+    return session;
   }
 
   update(session: Session<TState>, message: TMessage): Session<TState> {
@@ -46,4 +72,36 @@ export class SessionStore<TState, TMessage> {
     session.projectionVersion += 1;
     return session.projectionVersion;
   }
+
+  snapshot(session: Session<TState>): SessionSnapshot<TState> {
+    return {
+      sessionId: session.sessionId,
+      route: session.route,
+      params: session.params,
+      state: session.state,
+      projectionVersion: session.projectionVersion,
+      cursor: session.cursor,
+      observedRegions: session.observedRegions,
+    };
+  }
+
+  #advanceNextId(sessionId: string): void {
+    const match = /^session-(\d+)$/.exec(sessionId);
+
+    if (!match) {
+      return;
+    }
+
+    this.#nextId = Math.max(this.#nextId, Number(match[1]) + 1);
+  }
 }
+
+export type SessionSnapshot<TState> = {
+  sessionId: string;
+  route: string;
+  params: Record<string, string>;
+  state: TState;
+  projectionVersion: number;
+  cursor: string | null;
+  observedRegions: ProjectionRegionSnapshot[];
+};

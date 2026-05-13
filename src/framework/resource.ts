@@ -1,4 +1,5 @@
 import type { JsonValue } from "./json";
+import type { ProjectionRegionSnapshot } from "./projection";
 
 export type ResourceKey<TValue = unknown> = {
   readonly type: string;
@@ -31,6 +32,12 @@ export type ResourceObservation = {
   key: SerializedResourceKey;
 };
 
+export type ResourceObservationResult<TValue> = {
+  value: TValue;
+  observed: SerializedResourceKey[];
+  regions: ProjectionRegionSnapshot[];
+};
+
 export function resourceKey<TValue>(
   type: string,
   id: string,
@@ -57,7 +64,7 @@ export function defineResource<TServices, TValue>(
 export class ResourceGraph<TServices> {
   readonly #definitions = new Map<string, ResourceDefinition<TServices, unknown>>();
   readonly #cache = new Map<string, ResourceSnapshot>();
-  readonly #observers: Array<(key: ResourceKey) => void> = [];
+  readonly #observers: ResourceObservationScope[] = [];
 
   register<TValue>(definition: ResourceDefinition<TServices, TValue>): void {
     this.#definitions.set(definition.type, definition as ResourceDefinition<TServices, unknown>);
@@ -96,18 +103,42 @@ export class ResourceGraph<TServices> {
 
   async observe<TValue>(
     read: () => Promise<TValue> | TValue,
-  ): Promise<{ value: TValue; observed: SerializedResourceKey[] }> {
-    const observed = new Map<string, SerializedResourceKey>();
+  ): Promise<ResourceObservationResult<TValue>> {
+    const scope: ResourceObservationScope = {
+      regionId: "root",
+      regions: new Map(),
+    };
 
-    this.#observers.push((key) => {
-      observed.set(resourceKeyId(key), serializeResourceKey(key));
-    });
+    this.#observers.push(scope);
 
     try {
       const value = await read();
-      return { value, observed: [...observed.values()] };
+      const regions = [...scope.regions.entries()].map(([id, resources]) => ({
+        id,
+        resources: [...resources.values()],
+      }));
+      const observed = uniqueResources(regions);
+
+      return { value, observed, regions };
     } finally {
       this.#observers.pop();
+    }
+  }
+
+  async region<TValue>(id: string, read: () => Promise<TValue> | TValue): Promise<TValue> {
+    const observer = this.#observers.at(-1);
+
+    if (!observer) {
+      return read();
+    }
+
+    const previous = observer.regionId;
+    observer.regionId = id;
+
+    try {
+      return await read();
+    } finally {
+      observer.regionId = previous;
     }
   }
 
@@ -115,9 +146,33 @@ export class ResourceGraph<TServices> {
     const observer = this.#observers.at(-1);
 
     if (observer) {
-      observer(key);
+      let resources = observer.regions.get(observer.regionId);
+
+      if (!resources) {
+        resources = new Map();
+        observer.regions.set(observer.regionId, resources);
+      }
+
+      resources.set(resourceKeyId(key), serializeResourceKey(key));
     }
   }
+}
+
+type ResourceObservationScope = {
+  regionId: string;
+  regions: Map<string, Map<string, SerializedResourceKey>>;
+};
+
+function uniqueResources(regions: ProjectionRegionSnapshot[]): SerializedResourceKey[] {
+  const resources = new Map<string, SerializedResourceKey>();
+
+  for (const region of regions) {
+    for (const resource of region.resources) {
+      resources.set(`${resource.type}:${resource.id}`, resource);
+    }
+  }
+
+  return [...resources.values()];
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
