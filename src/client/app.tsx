@@ -12,25 +12,36 @@ function App() {
   const stream = useRef<ApprovalStreamClient | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [resumed, setResumed] = useState(false);
   const [projection, setProjection] = useState<ApprovalProjection | null>(null);
   const [projectionVersion, setProjectionVersion] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceSnapshot[]>([]);
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
+  const [deploymentFilter, setDeploymentFilter] = useState("");
 
   useEffect(() => {
     stream.current = connectApprovalStream({
       onConnectionState: setConnection,
-      onSession: setSessionId,
+      onSession(nextSessionId, nextResumed) {
+        setSessionId(nextSessionId);
+        setResumed(nextResumed);
+      },
       onProjection(envelope) {
         setProjection(envelope.projection);
         setProjectionVersion(envelope.projectionVersion);
+        setCursor(envelope.cursor);
         setTraces(envelope.projection.traces);
       },
       onTrace(envelope) {
+        setCursor(envelope.cursor);
         setTraces((current) => mergeTrace(current, envelope.trace));
       },
-      onActionResult: setLastResult,
+      onActionResult(envelope) {
+        setCursor(envelope.cursor);
+        setLastResult(envelope);
+      },
       onError: setLastError,
     });
 
@@ -50,6 +61,8 @@ function App() {
         <div className="status-strip">
           <span data-state={connection}>{connection}</span>
           <span>{sessionId ?? "no session"}</span>
+          <span>{resumed ? "resumed" : "fresh"}</span>
+          <span>{cursor ?? "no cursor"}</span>
           <span>projection v{projectionVersion}</span>
         </div>
       </header>
@@ -69,6 +82,8 @@ function App() {
       {projection ? (
         <section className="workspace">
           <DeploymentList
+            filter={deploymentFilter}
+            onFilter={setDeploymentFilter}
             projection={projection}
             selectedId={selectedId}
             onSelect={(deploymentId) =>
@@ -106,18 +121,35 @@ function Banner(props: { tone: "success" | "error"; text: string }) {
 }
 
 function DeploymentList(props: {
+  filter: string;
+  onFilter: (value: string) => void;
   projection: ApprovalProjection;
   selectedId: string | null;
   onSelect: (deploymentId: string) => void;
 }) {
+  const deployments = props.projection.pendingDeployments.filter((deployment) =>
+    `${deployment.service} ${deployment.version} ${deployment.environment}`
+      .toLowerCase()
+      .includes(props.filter.toLowerCase()),
+  );
+
   return (
     <section className="panel list-panel">
       <div className="panel-header">
         <h2>{props.projection.team.name} pending deploys</h2>
         <span>{props.projection.pendingDeployments.length}</span>
       </div>
+      <label className="filter-control">
+        <span>Local filter</span>
+        <input
+          onChange={(event) => props.onFilter(event.currentTarget.value)}
+          placeholder="Filter deployments"
+          type="search"
+          value={props.filter}
+        />
+      </label>
       <div className="deployment-list">
-        {props.projection.pendingDeployments.map((deployment) => (
+        {deployments.map((deployment) => (
           <button
             className="deployment-row"
             data-selected={deployment.id === props.selectedId}

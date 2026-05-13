@@ -1,4 +1,4 @@
-import { createRuntime, defineProgram } from "../../framework";
+import { createRuntime, defineProgram, type RuntimeStore } from "../../framework";
 import { approvalActions } from "./actions";
 import { approvalResources } from "./resources";
 import { approvalScreen } from "./screen";
@@ -36,6 +36,7 @@ export function createApprovalProgram(options?: {
 export function createApprovalRuntime(options?: {
   services?: ApprovalServices;
   currentUserId?: string;
+  store?: RuntimeStore<ApprovalSessionState, ApprovalProjection>;
 }) {
-  return createRuntime(createApprovalProgram(options));
+  return createRuntime(createApprovalProgram(options), { store: options?.store });
 }

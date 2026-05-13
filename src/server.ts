@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { parseClientEnvelope, type ServerEnvelope } from "./framework";
+import { JsonFileRuntimeStore, parseClientEnvelope, type ServerEnvelope } from "./framework";
 import { createApprovalRuntime } from "./demo/approvals/program";
 import type { ApprovalClientMessage, ApprovalProjection } from "./demo/approvals/types";
 
@@ -10,7 +10,11 @@ const clientOut = join(outdir, "app.js");
 
 await buildClient();
 
-const runtime = createApprovalRuntime();
+const runtime = createApprovalRuntime({
+  store: Bun.env.RUNTIME_STORE_PATH
+    ? new JsonFileRuntimeStore(Bun.env.RUNTIME_STORE_PATH)
+    : undefined,
+});
 const port = Number(Bun.env.PORT ?? 3000);
 
 const server = Bun.serve({

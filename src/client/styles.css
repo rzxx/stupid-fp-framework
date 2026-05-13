@@ -129,6 +129,27 @@ button {
   padding: 4px 8px;
 }
 
+.filter-control {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.filter-control span {
+  color: #57646d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.filter-control input {
+  border: 1px solid #d5dde1;
+  border-radius: 6px;
+  color: #172026;
+  font: inherit;
+  padding: 9px 10px;
+  width: 100%;
+}
+
 .deployment-list {
   display: grid;
   gap: 10px;
