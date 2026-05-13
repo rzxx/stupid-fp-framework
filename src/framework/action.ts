@@ -62,10 +62,10 @@ export async function executeAction<TServices, TMessage extends { type: string }
 
   traces.add(trace, "action", `${String(action.type)} started`);
 
-  const result = await Effect.runPromiseExit(action.run(message, context));
+  const result = await Effect.runPromise(Effect.either(action.run(message, context)));
 
-  if (result._tag === "Failure") {
-    const message = String(result.cause);
+  if (result._tag === "Left") {
+    const message = result.left.message;
     traces.fail(trace, message);
     return { ok: false, error: message, invalidated };
   }

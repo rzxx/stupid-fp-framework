@@ -1,0 +1,232 @@
+import { createRoot } from "react-dom/client";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ActionResultEnvelope, ErrorEnvelope } from "../framework";
+import type { ApprovalProjection } from "../demo/approvals/types";
+import {
+  connectApprovalStream,
+  type ApprovalStreamClient,
+  type ConnectionState,
+} from "./stream-client";
+
+function App() {
+  const stream = useRef<ApprovalStreamClient | null>(null);
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [projection, setProjection] = useState<ApprovalProjection | null>(null);
+  const [projectionVersion, setProjectionVersion] = useState(0);
+  const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
+  const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
+
+  useEffect(() => {
+    stream.current = connectApprovalStream({
+      onConnectionState: setConnection,
+      onSession: setSessionId,
+      onProjection(envelope) {
+        setProjection(envelope.projection);
+        setProjectionVersion(envelope.projectionVersion);
+      },
+      onTrace() {
+        // Traces are included in the server projection; this event exists so the
+        // stream can grow without changing the client contract.
+      },
+      onActionResult: setLastResult,
+      onError: setLastError,
+    });
+
+    return () => stream.current?.close();
+  }, []);
+
+  const selectedId = projection?.selectedDeployment?.id ?? null;
+  const selectedIsPending = projection?.selectedDeployment?.status === "pending";
+
+  return (
+    <main className="app-shell">
+      <header className="top-bar">
+        <div>
+          <p className="eyebrow">Durable server program prototype</p>
+          <h1>Deployment approvals</h1>
+        </div>
+        <div className="status-strip">
+          <span data-state={connection}>{connection}</span>
+          <span>{sessionId ?? "no session"}</span>
+          <span>projection v{projectionVersion}</span>
+        </div>
+      </header>
+
+      {lastError ? <Banner tone="error" text={lastError.message} /> : null}
+      {lastResult ? (
+        <Banner
+          tone={lastResult.ok ? "success" : "error"}
+          text={
+            lastResult.ok
+              ? "Approval action completed on the server."
+              : (lastResult.error ?? "Action failed.")
+          }
+        />
+      ) : null}
+
+      {projection ? (
+        <section className="workspace">
+          <DeploymentList
+            projection={projection}
+            selectedId={selectedId}
+            onSelect={(deploymentId) =>
+              stream.current?.send({
+                type: "session.selectDeployment",
+                deploymentId,
+              })
+            }
+          />
+          <DetailPanel
+            projection={projection}
+            canApprove={selectedIsPending}
+            onApprove={(deploymentId) =>
+              stream.current?.send({
+                type: "action.approveDeployment",
+                deploymentId,
+              })
+            }
+          />
+          <TracePanel
+            projection={projection}
+            onToggle={() => stream.current?.send({ type: "session.toggleTracePanel" })}
+          />
+        </section>
+      ) : (
+        <section className="loading">Waiting for server projection...</section>
+      )}
+    </main>
+  );
+}
+
+function Banner(props: { tone: "success" | "error"; text: string }) {
+  return <div className={`banner ${props.tone}`}>{props.text}</div>;
+}
+
+function DeploymentList(props: {
+  projection: ApprovalProjection;
+  selectedId: string | null;
+  onSelect: (deploymentId: string) => void;
+}) {
+  return (
+    <section className="panel list-panel">
+      <div className="panel-header">
+        <h2>{props.projection.team.name} pending deploys</h2>
+        <span>{props.projection.pendingDeployments.length}</span>
+      </div>
+      <div className="deployment-list">
+        {props.projection.pendingDeployments.map((deployment) => (
+          <button
+            className="deployment-row"
+            data-selected={deployment.id === props.selectedId}
+            key={deployment.id}
+            onClick={() => props.onSelect(deployment.id)}
+            type="button"
+          >
+            <strong>{deployment.service}</strong>
+            <span>{deployment.version}</span>
+            <small>
+              {deployment.environment} by {deployment.requestedBy}
+            </small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DetailPanel(props: {
+  projection: ApprovalProjection;
+  canApprove: boolean;
+  onApprove: (deploymentId: string) => void;
+}) {
+  const deployment = props.projection.selectedDeployment;
+
+  return (
+    <section className="panel detail-panel">
+      <div className="panel-header">
+        <h2>Selected deployment</h2>
+      </div>
+      {deployment ? (
+        <>
+          <div className="detail-main">
+            <p className="eyebrow">{deployment.status}</p>
+            <h3>{deployment.service}</h3>
+            <p>
+              {deployment.version} to {deployment.environment}
+            </p>
+          </div>
+          <button
+            className="primary-action"
+            disabled={!props.canApprove}
+            onClick={() => props.onApprove(deployment.id)}
+            type="button"
+          >
+            Approve on server
+          </button>
+          <h4>Audit trail</h4>
+          <ol className="audit-list">
+            {deployment.auditTrail.map((entry) => (
+              <li key={entry.id}>
+                <span>{entry.event}</span>
+                <small>
+                  {entry.actorId} at {formatTime(entry.at)}
+                </small>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : (
+        <p className="empty-state">Select a pending deployment.</p>
+      )}
+    </section>
+  );
+}
+
+function TracePanel(props: { projection: ApprovalProjection; onToggle: () => void }) {
+  const traces = useMemo(() => props.projection.traces.slice(0, 5), [props.projection.traces]);
+
+  return (
+    <section className="panel trace-panel">
+      <div className="panel-header">
+        <h2>Trace</h2>
+        <button className="secondary-action" onClick={props.onToggle} type="button">
+          {props.projection.tracePanelOpen ? "Hide" : "Show"}
+        </button>
+      </div>
+      {props.projection.tracePanelOpen ? (
+        traces.length > 0 ? (
+          <div className="trace-list">
+            {traces.map((trace) => (
+              <article className="trace" data-status={trace.status} key={trace.traceId}>
+                <h3>{trace.label}</h3>
+                <ol>
+                  {trace.events.map((event, index) => (
+                    <li key={`${trace.traceId}-${index}`}>
+                      <strong>{event.phase}</strong>
+                      <span>{event.label}</span>
+                    </li>
+                  ))}
+                </ol>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-state">No messages yet.</p>
+        )
+      ) : (
+        <p className="empty-state">Trace panel is session state on the server.</p>
+      )}
+    </section>
+  );
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
+createRoot(document.getElementById("root") as HTMLElement).render(<App />);
