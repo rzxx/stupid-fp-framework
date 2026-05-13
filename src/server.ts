@@ -6,7 +6,7 @@ import type { ApprovalClientMessage, ApprovalProjection } from "./demo/approvals
 
 const root = import.meta.dir;
 const outdir = join(root, "..", "dist");
-const clientOut = join(outdir, "client.js");
+const clientOut = join(outdir, "app.js");
 
 await buildClient();
 
