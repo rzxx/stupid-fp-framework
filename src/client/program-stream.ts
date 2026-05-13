@@ -26,12 +26,23 @@ export type ProgramStreamOptions<TProjection, TTrace> = {
   params: Record<string, string>;
   storageKey?: string;
   handlers: ProgramStreamHandlers<TProjection, TTrace>;
+  environment?: ProgramStreamEnvironment;
 };
 
 export type ProgramStreamClient<TMessage> = {
   send: (message: TMessage) => void;
   close: () => void;
 };
+
+export type ProgramStreamEnvironment = {
+  createSocket?: (url: string) => ProgramStreamSocket;
+  storage?: ProgramStreamStorage;
+  streamUrl?: string;
+};
+
+export type ProgramStreamSocket = Pick<WebSocket, "addEventListener" | "close" | "send">;
+
+export type ProgramStreamStorage = Pick<Storage, "getItem" | "setItem">;
 
 type ResumeState = {
   sessionId: string;
@@ -41,14 +52,15 @@ type ResumeState = {
 export function connectProgramStream<TMessage, TProjection, TTrace>(
   options: ProgramStreamOptions<TProjection, TTrace>,
 ): ProgramStreamClient<TMessage> {
-  const socket = new WebSocket(streamUrl());
+  const url = options.environment?.streamUrl ?? streamUrl();
+  const socket = options.environment?.createSocket?.(url) ?? new WebSocket(url);
   let sessionId: string | null = null;
 
   options.handlers.onConnectionState("connecting");
 
   socket.addEventListener("open", () => {
     options.handlers.onConnectionState("open");
-    const resume = readResume(options.storageKey);
+    const resume = readResume(options.storageKey, options.environment?.storage);
     sendEnvelope<TMessage>(socket, {
       type: "connect",
       route: options.route,
@@ -68,7 +80,7 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
   socket.addEventListener("message", (event) => {
     const envelope = JSON.parse(String(event.data)) as ServerEnvelope<TProjection, TTrace>;
 
-    persistCursor(options.storageKey, envelope);
+    persistCursor(options.storageKey, envelope, options.environment?.storage);
 
     if (envelope.type === "connected") {
       sessionId = envelope.sessionId;
@@ -117,7 +129,10 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
   };
 }
 
-function sendEnvelope<TMessage>(socket: WebSocket, envelope: ClientEnvelope<TMessage>): void {
+function sendEnvelope<TMessage>(
+  socket: ProgramStreamSocket,
+  envelope: ClientEnvelope<TMessage>,
+): void {
   socket.send(JSON.stringify(envelope));
 }
 
@@ -126,12 +141,15 @@ function streamUrl(): string {
   return `${protocol}//${window.location.host}/stream`;
 }
 
-function readResume(storageKey: string | undefined): ResumeState | undefined {
+function readResume(
+  storageKey: string | undefined,
+  storage: ProgramStreamStorage = window.sessionStorage,
+): ResumeState | undefined {
   if (!storageKey) {
     return undefined;
   }
 
-  const value = window.sessionStorage.getItem(storageKey);
+  const value = storage.getItem(storageKey);
 
   if (!value) {
     return undefined;
@@ -150,12 +168,13 @@ function readResume(storageKey: string | undefined): ResumeState | undefined {
 function persistCursor<TProjection, TTrace>(
   storageKey: string | undefined,
   envelope: ServerEnvelope<TProjection, TTrace>,
+  storage: ProgramStreamStorage = window.sessionStorage,
 ): void {
   if (!storageKey || !("cursor" in envelope) || !envelope.sessionId) {
     return;
   }
 
-  window.sessionStorage.setItem(
+  storage.setItem(
     storageKey,
     JSON.stringify({
       sessionId: envelope.sessionId,
