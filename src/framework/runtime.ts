@@ -368,6 +368,14 @@ export function createRuntime<
       await persistEnvelope(session, patch);
       envelopes.push(patch);
 
+      if (trace) {
+        traces.add(trace, "stream", "region patch streamed", {
+          sessionId: affectedSession.sessionId,
+          projectionVersion: computed.projectionVersion,
+          regions: regions.map((region) => region.id),
+        });
+      }
+
       const projection = projectionEnvelope(computed, trace);
       await persistEnvelope(session, projection);
       envelopes.push(projection);

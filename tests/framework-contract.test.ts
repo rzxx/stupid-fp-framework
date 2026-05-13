@@ -245,6 +245,15 @@ describe("framework contract", () => {
           label: "resources observed",
           detail: { resources: ["Counter(main)"] },
         }),
+        expect.objectContaining({
+          phase: "stream",
+          label: "region patch streamed",
+          detail: {
+            sessionId: connected.sessionId,
+            projectionVersion: 2,
+            regions: ["counter"],
+          },
+        }),
       ]),
     );
   });
