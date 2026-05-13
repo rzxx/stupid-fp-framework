@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { useMemo, useState } from "react";
 import type { TraceSnapshot } from "../framework";
 import type { ApprovalClientMessage, ApprovalProjection } from "../demo/approvals/types";
+import { applyRegionValuePatch } from "./projection-patch";
 import { useProgramStream, type ProgramStreamReactOptions } from "./react-adapter";
 
 function App() {
@@ -14,6 +15,24 @@ function App() {
       params: { teamId: "team-platform" },
       storageKey: "approval-stream",
       projectionTraces: (projection) => projection.traces,
+      applyPatch: (projection, patch) =>
+        applyRegionValuePatch(projection, patch, {
+          pendingDeployments: (current, value) =>
+            Array.isArray(value)
+              ? {
+                  ...current,
+                  pendingDeployments: value as ApprovalProjection["pendingDeployments"],
+                }
+              : current,
+          selectedDeployment: (current, value) => ({
+            ...current,
+            selectedDeployment: value as ApprovalProjection["selectedDeployment"],
+          }),
+          tracePanel: (current, value) =>
+            Array.isArray(value)
+              ? { ...current, traces: value as ApprovalProjection["traces"] }
+              : current,
+        }),
     };
   }, []);
   const stream = useProgramStream<ApprovalClientMessage, ApprovalProjection, TraceSnapshot>(

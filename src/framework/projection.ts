@@ -1,10 +1,11 @@
-import type { JsonRecord } from "./json";
+import type { JsonRecord, JsonValue } from "./json";
 import type { ResourceGraph } from "./resource";
 import type { Session } from "./session";
 import type { TraceReader } from "./trace";
 
 export type ProjectionRegionSnapshot = {
   id: string;
+  value?: JsonValue;
   resources: {
     type: string;
     id: string;

@@ -77,6 +77,7 @@ describe("framework contract", () => {
     expect(envelope.regions).toEqual([
       {
         id: "counter",
+        value: 0,
         resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
       },
     ]);
@@ -110,6 +111,7 @@ describe("framework contract", () => {
         regions: [
           {
             id: "counter",
+            value: 0,
             resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
           },
         ],
@@ -140,12 +142,14 @@ describe("framework contract", () => {
     expect(slow.regions).toEqual([
       {
         id: "slow-region",
+        value: 0,
         resources: [{ type: "Counter", id: "slow", label: "Counter(slow)" }],
       },
     ]);
     expect(fast.regions).toEqual([
       {
         id: "fast-region",
+        value: 0,
         resources: [{ type: "Counter", id: "fast", label: "Counter(fast)" }],
       },
     ]);
@@ -210,9 +214,11 @@ describe("framework contract", () => {
     expect(patch.patch.regions).toEqual([
       {
         id: "counter",
+        value: 2,
         resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
       },
     ]);
+    expect(applyCounterPatch(connected.projection, patch).count).toBe(2);
     expect(projection.count).toBe(2);
     expect(services.counter.writes).toEqual(["increment:2"]);
     expect(trace.status).toBe("success");
@@ -620,7 +626,9 @@ async function connect(runtime: ReturnType<typeof createCounterRuntime>) {
     throw new Error("Expected connected envelope");
   }
 
-  return { sessionId: connected.sessionId };
+  const projection = latestProjection(result.envelopes);
+
+  return { sessionId: connected.sessionId, projection: projection.projection };
 }
 
 function latestProjection(
@@ -730,6 +738,14 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Proj
       envelope: { type: "projection:update" },
     },
   ]);
+}
+
+function applyCounterPatch(projection: Projection, patch: ProjectionPatchEnvelope): Projection {
+  const counterRegion = patch.patch.regions.find((region) => region.id === "counter");
+
+  return typeof counterRegion?.value === "number"
+    ? { ...projection, count: counterRegion.value }
+    : projection;
 }
 
 function isMessage(value: unknown): value is { type: string } {

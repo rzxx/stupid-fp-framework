@@ -20,8 +20,8 @@ export const approvalScreen: ScreenDefinition<
     const teamId = session.params.teamId;
     const team = context.services.teams.find(teamId);
     const currentUser = context.services.auth.currentUser();
-    const pending = await context.region("pendingDeployments", () =>
-      context.resources.read(context.services, PendingDeployments(teamId)),
+    const pendingDeployments = await context.region("pendingDeployments", async () =>
+      (await context.resources.read(context.services, PendingDeployments(teamId))).map(summary),
     );
     const selectedDeployment = session.state.selectedDeploymentId
       ? await context.region("selectedDeployment", () =>
@@ -37,7 +37,7 @@ export const approvalScreen: ScreenDefinition<
         name: currentUser.name,
         role: currentUser.role,
       },
-      pendingDeployments: pending.map(summary),
+      pendingDeployments,
       selectedDeployment,
       tracePanelOpen: session.state.tracePanelOpen,
       traces: await context.region("tracePanel", () => context.traces.list()),

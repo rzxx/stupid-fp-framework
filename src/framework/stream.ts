@@ -51,6 +51,7 @@ export type ProjectionEnvelope<TProjection> = {
   projection: TProjection;
   regions: {
     id: string;
+    value?: JsonValue;
     resources: {
       type: string;
       id: string;
@@ -64,10 +65,12 @@ export type ProjectionPatchEnvelope = {
   type: "projection:patch";
   sessionId: string;
   cursor: string;
+  projectionVersion: number;
   patch: {
-    kind: "regions-invalidated";
+    kind: "region-values";
     regions: {
       id: string;
+      value?: JsonValue;
       resources: {
         type: string;
         id: string;

@@ -55,11 +55,41 @@ export function createRuntime<
     sessionId: string,
     trace?: TraceSnapshot,
   ): Promise<RuntimeResult<TProjection>> {
+    const computed = await computeProjection(sessionId, trace);
+
+    if ("error" in computed) {
+      return {
+        envelopes: [computed.error],
+      };
+    }
+
+    const envelope = projectionEnvelope(computed, trace);
+    await persistEnvelope(computed.session, envelope);
+
+    return {
+      envelopes: [envelope],
+    };
+  }
+
+  async function computeProjection(
+    sessionId: string,
+    trace?: TraceSnapshot,
+  ): Promise<
+    | {
+        session: Session<TSessionState>;
+        projection: TProjection;
+        projectionVersion: number;
+        regions: ProjectionRegionSnapshot[];
+      }
+    | {
+        error: ServerEnvelope<TProjection, TraceSnapshot>;
+      }
+  > {
     const session = sessions.get(sessionId);
 
     if (!session) {
       return {
-        envelopes: [{ type: "error", sessionId, message: "Unknown session" }],
+        error: { type: "error", sessionId, message: "Unknown session" },
       };
     }
 
@@ -67,13 +97,11 @@ export function createRuntime<
 
     if (!screen) {
       return {
-        envelopes: [
-          {
-            type: "error",
-            sessionId,
-            message: `No screen registered for route: ${session.route}`,
-          },
-        ],
+        error: {
+          type: "error",
+          sessionId,
+          message: `No screen registered for route: ${session.route}`,
+        },
       };
     }
 
@@ -104,20 +132,31 @@ export function createRuntime<
       });
     }
 
-    const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
-      type: "projection:update",
-      sessionId,
-      cursor: "",
-      projectionVersion,
-      projection,
-      regions: observed.regions,
-      causedByTraceId: trace?.traceId,
-    };
-
-    await persistEnvelope(session, envelope);
-
     return {
-      envelopes: [envelope],
+      session,
+      projection,
+      projectionVersion,
+      regions: observed.regions,
+    };
+  }
+
+  function projectionEnvelope(
+    computed: {
+      session: Session<TSessionState>;
+      projection: TProjection;
+      projectionVersion: number;
+      regions: ProjectionRegionSnapshot[];
+    },
+    trace?: TraceSnapshot,
+  ): ServerEnvelope<TProjection, TraceSnapshot> {
+    return {
+      type: "projection:update",
+      sessionId: computed.session.sessionId,
+      cursor: "",
+      projectionVersion: computed.projectionVersion,
+      projection: computed.projection,
+      regions: computed.regions,
+      causedByTraceId: trace?.traceId,
     };
   }
 
@@ -233,10 +272,7 @@ export function createRuntime<
       await persistEnvelope(session, actionResult);
       const projected =
         result.ok && result.invalidated.length > 0
-          ? ownSessionResult(
-              await refreshAffectedSessions(result.invalidated, trace),
-              session.sessionId,
-            )
+          ? await refreshAffectedSessions(result.invalidated, trace)
           : await project(session.sessionId, trace);
 
       if (result.ok) {
@@ -295,6 +331,12 @@ export function createRuntime<
     const envelopes: ServerEnvelope<TProjection, TraceSnapshot>[] = [];
 
     for (const affectedSession of affected) {
+      const session = sessions.get(affectedSession.sessionId);
+
+      if (!session) {
+        continue;
+      }
+
       if (trace) {
         traces.add(trace, "projection", "regions invalidated", {
           sessionId: affectedSession.sessionId,
@@ -302,25 +344,33 @@ export function createRuntime<
         });
       }
 
+      const computed = await computeProjection(affectedSession.sessionId, trace);
+
+      if ("error" in computed) {
+        envelopes.push(computed.error);
+        continue;
+      }
+
+      const invalidatedRegionIds = new Set(affectedSession.regions.map((region) => region.id));
+      const regions = computed.regions.filter((region) => invalidatedRegionIds.has(region.id));
       const patch: ServerEnvelope<TProjection, TraceSnapshot> = {
         type: "projection:patch",
         sessionId: affectedSession.sessionId,
         cursor: "",
+        projectionVersion: computed.projectionVersion,
         patch: {
-          kind: "regions-invalidated",
-          regions: affectedSession.regions,
+          kind: "region-values",
+          regions,
         },
         causedByTraceId: trace?.traceId,
       };
-      const session = sessions.get(affectedSession.sessionId);
-
-      if (!session) {
-        continue;
-      }
 
       await persistEnvelope(session, patch);
       envelopes.push(patch);
-      envelopes.push(...(await project(affectedSession.sessionId, trace)).envelopes);
+
+      const projection = projectionEnvelope(computed, trace);
+      await persistEnvelope(session, projection);
+      envelopes.push(projection);
     }
 
     return { envelopes };
@@ -375,15 +425,6 @@ export function createRuntime<
       program.screenByRoute.get(route) ?? (program.screens.length === 1 ? program.screens[0] : null)
     );
   }
-}
-
-function ownSessionResult<TProjection>(
-  result: RuntimeResult<TProjection>,
-  sessionId: string,
-): RuntimeResult<TProjection> {
-  return {
-    envelopes: result.envelopes.filter((envelope) => envelope.sessionId === sessionId),
-  };
 }
 
 function sameParams(left: Record<string, string>, right: Record<string, string>): boolean {

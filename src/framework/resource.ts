@@ -112,9 +112,10 @@ export class ResourceGraph<TServices> {
 
     return this.#observerStorage.run(scope, async () => {
       const value = await Promise.resolve(read());
-      const regions = [...scope.regions.entries()].map(([id, resources]) => ({
+      const regions = [...scope.regions.entries()].map(([id, region]) => ({
         id,
-        resources: [...resources.values()],
+        value: region.value,
+        resources: [...region.resources.values()],
       }));
       const observed = uniqueResources(regions);
 
@@ -133,7 +134,14 @@ export class ResourceGraph<TServices> {
     observer.regionId = id;
 
     try {
-      return await read();
+      const value = await read();
+      const region = this.#ensureRegion(observer, id);
+
+      if (isJsonValue(value)) {
+        region.value = value;
+      }
+
+      return value;
     } finally {
       observer.regionId = previous;
     }
@@ -143,21 +151,39 @@ export class ResourceGraph<TServices> {
     const observer = this.#observerStorage.getStore();
 
     if (observer) {
-      let resources = observer.regions.get(observer.regionId);
+      const region = this.#ensureRegion(observer, observer.regionId);
 
-      if (!resources) {
-        resources = new Map();
-        observer.regions.set(observer.regionId, resources);
-      }
-
-      resources.set(resourceKeyId(key), serializeResourceKey(key));
+      region.resources.set(resourceKeyId(key), serializeResourceKey(key));
     }
+  }
+
+  #ensureRegion(
+    observer: ResourceObservationScope,
+    id: string,
+  ): {
+    value?: JsonValue;
+    resources: Map<string, SerializedResourceKey>;
+  } {
+    let region = observer.regions.get(id);
+
+    if (!region) {
+      region = { resources: new Map() };
+      observer.regions.set(id, region);
+    }
+
+    return region;
   }
 }
 
 type ResourceObservationScope = {
   regionId: string;
-  regions: Map<string, Map<string, SerializedResourceKey>>;
+  regions: Map<
+    string,
+    {
+      value?: JsonValue;
+      resources: Map<string, SerializedResourceKey>;
+    }
+  >;
 };
 
 function uniqueResources(regions: ProjectionRegionSnapshot[]): SerializedResourceKey[] {

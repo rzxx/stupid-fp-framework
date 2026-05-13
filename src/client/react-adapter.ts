@@ -16,6 +16,7 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
   params: Record<string, string>;
   storageKey?: string;
   projectionTraces?: (projection: TProjection) => TTrace[];
+  applyPatch?: (projection: TProjection, envelope: ProjectionPatchEnvelope) => TProjection;
 };
 
 export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
@@ -73,6 +74,23 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
         onPatch(envelope) {
           setCursor(envelope.cursor);
           setLastPatch(envelope);
+
+          if (options.applyPatch) {
+            setProjection((current) => {
+              if (!current) {
+                return current;
+              }
+
+              const next = options.applyPatch?.(current, envelope) ?? current;
+
+              if (options.projectionTraces) {
+                setTraces(options.projectionTraces(next));
+              }
+
+              setProjectionVersion(envelope.projectionVersion);
+              return next;
+            });
+          }
         },
         onTrace(envelope) {
           setCursor(envelope.cursor);
