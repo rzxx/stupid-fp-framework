@@ -12,3 +12,5 @@ For the full design context, start with [docs/design/README.md](design/README.md
 - Read [experiments.md](design/experiments.md) when planning prototypes, scope, risks, and open questions.
 
 The first vertical-slice implementation boundary is locked in [docs/prototype-plan.md](prototype-plan.md).
+
+The current hardening stage is scoped in [docs/kernel-hardening-plan.md](kernel-hardening-plan.md).

@@ -23,6 +23,7 @@ Live sessions matter, but they are not the whole framework. A live session is th
 - [runtime.md](runtime.md): runtime architecture, runtime flows, Bun host, custom stream, React adapter, RSC/Flight relationship, and renderer-agnostic pressure.
 - [experiments.md](experiments.md): experiment phases, design tensions, non-goals, open questions, acceptance criteria, and next planning step.
 - [../prototype-plan.md](../prototype-plan.md): concrete boundary for the first Bun + React deployment-approval vertical slice.
+- [../kernel-hardening-plan.md](../kernel-hardening-plan.md): current next-stage scope for framework kernel hardening.
 
 ## How To Use This Set
 
@@ -32,5 +33,6 @@ If you are starting a new planning or implementation task, read [model.md](model
 - stream, host, adapter, or architecture work: [runtime.md](runtime.md)
 - prototype planning or scope control: [experiments.md](experiments.md)
 - first implementation work: [../prototype-plan.md](../prototype-plan.md)
+- current kernel hardening work: [../kernel-hardening-plan.md](../kernel-hardening-plan.md)
 
 This is not a final implementation spec. The API sketches are illustrative. The goal is to keep the project understandable and buildable enough that each next planning step can focus on a prototype without losing the larger vision.
