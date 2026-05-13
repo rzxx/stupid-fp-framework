@@ -4,6 +4,44 @@ import type { SessionSnapshot } from "./session";
 import type { ServerEnvelope } from "./stream";
 import type { TraceSnapshot } from "./trace";
 
+export const RUNTIME_STORE_PROTOCOL_VERSION = 1;
+
+export type RuntimeStoreCapabilities = {
+  ephemeral: boolean;
+  singleProcess: boolean;
+  supportsRangeRead: boolean;
+  supportsCompaction: boolean;
+  supportsPubSub: boolean;
+  retention: "unbounded" | "adapter-defined";
+};
+
+export type RuntimeStoreErrorReason =
+  | "read-failed"
+  | "write-failed"
+  | "corrupt-store"
+  | "unsupported-operation";
+
+export class RuntimeStoreError extends Error {
+  readonly type = "store-error";
+  readonly reason: RuntimeStoreErrorReason;
+  readonly cause?: unknown;
+
+  constructor(reason: RuntimeStoreErrorReason, message: string, cause?: unknown) {
+    super(message);
+    this.name = "RuntimeStoreError";
+    this.reason = reason;
+    this.cause = cause;
+  }
+}
+
+export function runtimeStoreError(
+  reason: RuntimeStoreErrorReason,
+  message: string,
+  cause?: unknown,
+): RuntimeStoreError {
+  return new RuntimeStoreError(reason, message, cause);
+}
+
 export type StoredEnvelope<TProjection, TTrace = TraceSnapshot> = {
   sessionId: string;
   cursor: string;
@@ -11,6 +49,7 @@ export type StoredEnvelope<TProjection, TTrace = TraceSnapshot> = {
 };
 
 export type RuntimeStore<TSessionState, TProjection, TTrace = TraceSnapshot> = {
+  capabilities: RuntimeStoreCapabilities;
   saveSession: (snapshot: SessionSnapshot<TSessionState>) => Promise<void>;
   loadSession: (sessionId: string) => Promise<SessionSnapshot<TSessionState> | null>;
   nextCursor: () => Promise<string>;
@@ -27,6 +66,7 @@ export type RuntimeStore<TSessionState, TProjection, TTrace = TraceSnapshot> = {
 };
 
 type StoredState<TSessionState, TProjection, TTrace> = {
+  protocolVersion: number;
   nextCursor: number;
   sessions: SessionSnapshot<TSessionState>[];
   envelopes: StoredEnvelope<TProjection, TTrace>[];
@@ -37,6 +77,15 @@ export class MemoryRuntimeStore<
   TProjection,
   TTrace = TraceSnapshot,
 > implements RuntimeStore<TSessionState, TProjection, TTrace> {
+  readonly capabilities: RuntimeStoreCapabilities = {
+    ephemeral: true,
+    singleProcess: true,
+    supportsRangeRead: true,
+    supportsCompaction: false,
+    supportsPubSub: false,
+    retention: "unbounded",
+  };
+
   readonly #sessions = new Map<string, SessionSnapshot<TSessionState>>();
   readonly #envelopes: StoredEnvelope<TProjection, TTrace>[] = [];
   #nextCursor = 1;
@@ -92,6 +141,15 @@ export class JsonFileRuntimeStore<
   TProjection,
   TTrace = TraceSnapshot,
 > implements RuntimeStore<TSessionState, TProjection, TTrace> {
+  readonly capabilities: RuntimeStoreCapabilities = {
+    ephemeral: false,
+    singleProcess: true,
+    supportsRangeRead: true,
+    supportsCompaction: false,
+    supportsPubSub: false,
+    retention: "adapter-defined",
+  };
+
   readonly #path: string;
 
   constructor(path: string) {
@@ -153,10 +211,31 @@ export class JsonFileRuntimeStore<
   async #read(): Promise<StoredState<TSessionState, TProjection, TTrace>> {
     try {
       const content = await readFile(this.#path, "utf8");
-      return JSON.parse(content) as StoredState<TSessionState, TProjection, TTrace>;
+      const parsed = JSON.parse(content) as Partial<
+        StoredState<TSessionState, TProjection, TTrace>
+      >;
+
+      if (!isStoredState(parsed)) {
+        throw runtimeStoreError("corrupt-store", `Runtime store ${this.#path} has invalid shape`);
+      }
+
+      return parsed as StoredState<TSessionState, TProjection, TTrace>;
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        return { nextCursor: 1, sessions: [], envelopes: [] };
+        return {
+          protocolVersion: RUNTIME_STORE_PROTOCOL_VERSION,
+          nextCursor: 1,
+          sessions: [],
+          envelopes: [],
+        };
+      }
+
+      if (error instanceof SyntaxError) {
+        throw runtimeStoreError(
+          "corrupt-store",
+          `Runtime store ${this.#path} is not valid JSON`,
+          error,
+        );
       }
 
       throw error;
@@ -165,6 +244,18 @@ export class JsonFileRuntimeStore<
 
   async #write(state: StoredState<TSessionState, TProjection, TTrace>): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    await writeFile(this.#path, JSON.stringify(state, null, 2));
+    await writeFile(
+      this.#path,
+      JSON.stringify({ ...state, protocolVersion: RUNTIME_STORE_PROTOCOL_VERSION }, null, 2),
+    );
   }
+}
+
+function isStoredState(value: Partial<StoredState<unknown, unknown, unknown>>): boolean {
+  return (
+    value.protocolVersion === RUNTIME_STORE_PROTOCOL_VERSION &&
+    typeof value.nextCursor === "number" &&
+    Array.isArray(value.sessions) &&
+    Array.isArray(value.envelopes)
+  );
 }

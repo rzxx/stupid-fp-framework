@@ -5,7 +5,12 @@ import { actionHooks, resourceHooks, routeHooks, sessionHooks, traceHooks } from
 import { screenRouteDefinition, screenRoutePattern, type Program } from "./program";
 import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
-import { MemoryRuntimeStore, type RuntimeStore } from "./store";
+import {
+  MemoryRuntimeStore,
+  RuntimeStoreError,
+  runtimeStoreError,
+  type RuntimeStore,
+} from "./store";
 import {
   type ClientEnvelope,
   type ProjectionPatchEnvelope,
@@ -342,7 +347,7 @@ export function createRuntime<
     session: Session<TSessionState>,
     envelope: ServerEnvelope<TProjection, TraceSnapshot>,
   ): Promise<void> {
-    const cursor = await store.nextCursor();
+    const cursor = await runStore(() => store.nextCursor());
 
     if (
       envelope.type === "connected" ||
@@ -355,8 +360,8 @@ export function createRuntime<
     }
 
     session.cursor = cursor;
-    await store.appendEnvelope(session.sessionId, cursor, envelope);
-    await store.saveSession(sessions.snapshot(session));
+    await runStore(() => store.appendEnvelope(session.sessionId, cursor, envelope));
+    await runStore(() => store.saveSession(sessions.snapshot(session)));
   }
 
   async function traceEnvelope(
@@ -520,7 +525,7 @@ export function createRuntime<
     result: ResumeResult;
     replay?: ServerEnvelope<TProjection, TraceSnapshot>[];
   }> {
-    const snapshot = await store.loadSession(resume.sessionId);
+    const snapshot = await runStore(() => store.loadSession(resume.sessionId));
 
     if (!snapshot) {
       return { result: { status: "rejected", reason: "missing-session" } };
@@ -530,7 +535,9 @@ export function createRuntime<
       return { result: { status: "rejected", reason: "route-mismatch" } };
     }
 
-    const cursorExists = await store.hasEnvelopeCursor(resume.sessionId, resume.cursor);
+    const cursorExists = await runStore(() =>
+      store.hasEnvelopeCursor(resume.sessionId, resume.cursor),
+    );
 
     if (!cursorExists) {
       return {
@@ -539,7 +546,7 @@ export function createRuntime<
       };
     }
 
-    const replay = await store.readEnvelopesAfter(resume.sessionId, resume.cursor);
+    const replay = await runStore(() => store.readEnvelopesAfter(resume.sessionId, resume.cursor));
 
     if (replay.length === 0) {
       return {
@@ -638,6 +645,22 @@ export function createRuntime<
       Effect.forEach(trace.events, (event) =>
         Effect.forEach(tracePluginHooks, (hook) => hook.event?.({ trace, event }) ?? Effect.void),
       ),
+    );
+  }
+
+  async function runStore<T>(operation: () => Promise<T>): Promise<T> {
+    return program.runtime.runPromise(
+      Effect.tryPromise({
+        try: operation,
+        catch: (error) =>
+          error instanceof RuntimeStoreError
+            ? error
+            : runtimeStoreError(
+                "read-failed",
+                error instanceof Error ? error.message : "Runtime store operation failed",
+                error,
+              ),
+      }),
     );
   }
 }

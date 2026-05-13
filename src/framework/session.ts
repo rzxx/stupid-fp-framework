@@ -1,6 +1,8 @@
 import type { ProjectionRegionSnapshot } from "./projection";
 import { acceptsSchema, type FrameworkSchema } from "./schema";
 
+export const SESSION_SNAPSHOT_VERSION = 1;
+
 export type Session<TState> = {
   sessionId: string;
   route: string;
@@ -118,6 +120,7 @@ export class SessionStore<TState, TMessage> {
 
   snapshot(session: Session<TState>): SessionSnapshot<TState> {
     return {
+      snapshotVersion: SESSION_SNAPSHOT_VERSION,
       sessionId: session.sessionId,
       route: session.route,
       params: session.params,
@@ -140,6 +143,7 @@ export class SessionStore<TState, TMessage> {
 }
 
 export type SessionSnapshot<TState> = {
+  snapshotVersion: number;
   sessionId: string;
   route: string;
   params: Record<string, string>;

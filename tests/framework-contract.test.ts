@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -21,6 +22,8 @@ import {
   type ProjectionEnvelope,
   type ProjectionPatchEnvelope,
   type FrameworkPlugin,
+  type RuntimeStoreCapabilities,
+  RuntimeStoreError,
   type RuntimeStore,
   type ServerEnvelope,
   type TraceEnvelope,
@@ -592,6 +595,36 @@ describe("framework contract", () => {
 
     await assertStoreEnvelopeHistory(memory);
     await assertStoreEnvelopeHistory(file);
+  });
+
+  test("runtime stores expose durability capability metadata", () => {
+    const memory = new MemoryRuntimeStore<SessionState, Projection>();
+    const file = new JsonFileRuntimeStore<SessionState, Projection>(
+      join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
+    );
+
+    expect(memory.capabilities).toMatchObject({
+      ephemeral: true,
+      singleProcess: true,
+      supportsRangeRead: true,
+    } satisfies Partial<RuntimeStoreCapabilities>);
+    expect(file.capabilities).toMatchObject({
+      ephemeral: false,
+      singleProcess: true,
+      supportsRangeRead: true,
+    } satisfies Partial<RuntimeStoreCapabilities>);
+  });
+
+  test("JSON file store reports corrupted state as a typed store failure", async () => {
+    const path = join(tmpdir(), `stupid-fp-framework-corrupt-${crypto.randomUUID()}.json`);
+    await writeFile(path, "{ nope", "utf8");
+    const store = new JsonFileRuntimeStore<SessionState, Projection>(path);
+
+    await expect(store.loadSession("session-1")).rejects.toBeInstanceOf(RuntimeStoreError);
+    await expect(store.loadSession("session-1")).rejects.toMatchObject({
+      type: "store-error",
+      reason: "corrupt-store",
+    });
   });
 
   test("resume with missed envelopes replays history instead of recomputing immediately", async () => {
