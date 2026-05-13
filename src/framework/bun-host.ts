@@ -91,6 +91,7 @@ async function buildClient(entrypoint: string, outdir: string): Promise<void> {
 
   if (!result.success) {
     for (const log of result.logs) {
+      // eslint-disable-next-line no-console
       console.error(log);
     }
 

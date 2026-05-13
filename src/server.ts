@@ -20,4 +20,5 @@ const server = await serveBunProgram<ApprovalClientMessage, ApprovalProjection, 
   port,
 });
 
+// eslint-disable-next-line no-console
 console.log(`Deployment approvals prototype running at http://localhost:${server.port}`);

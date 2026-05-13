@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import", "react", "unicorn", "typescript", "oxc"],
+  "env": {
+    "browser": true
+  },
+  "rules": {
+    "no-console": "warn",
+    "import/no-cycle": "warn",
+    "typescript/no-explicit-any": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["tests/**/*.ts", "tests/**/*.tsx"],
+      "rules": {
+        "no-console": "off",
+        "typescript/no-explicit-any": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["dist/", "node_modules/", "build/", "coverage/"]
+}
