@@ -33,6 +33,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Session message handling is now explicit through `SessionDefinition.accepts`; unknown messages fail at the kernel boundary.
 - Action payload validation belongs on each action definition before effects run; successful actions may return JSON result data through `action:result`.
 - Region metadata now drives `projection:patch` envelopes and `runtime.invalidate()` fanout; full projections remain the fallback payload.
+- Bun host plumbing lives behind `serveBunProgram`; the approval demo server now only wires app-specific files and runtime options.
 
 ## Progress
 
@@ -41,6 +42,7 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - Stage 3 done: moved resource observation to async-local scopes, added explicit invalid-message rejection, and covered parser payload validation.
 - Stage 4 done: added action validators, typed JSON result payloads, and invalid-action contract coverage.
 - Stage 5 done: added region patch envelopes, external invalidation fanout, and trace linkage for invalidated regions.
+- Stage 6 done: extracted a Bun host adapter and shrank `src/server.ts` to demo configuration.
 
 ## Skips
 
