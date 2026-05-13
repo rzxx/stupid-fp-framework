@@ -1,4 +1,5 @@
 export * from "./action";
+export * from "./effect";
 export * from "./json";
 export * from "./program";
 export * from "./projection";

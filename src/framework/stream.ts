@@ -1,7 +1,7 @@
 export type ConnectEnvelope = {
   type: "connect";
-  route: "/teams/:teamId/deployments";
-  params: { teamId: string };
+  route: string;
+  params: Record<string, string>;
   resumeCursor?: string;
 };
 
@@ -61,7 +61,7 @@ export function parseClientEnvelope<TMessage>(
     const value = JSON.parse(payload) as Partial<ClientEnvelope<TMessage>>;
 
     if (value.type === "connect") {
-      if (value.route !== "/teams/:teamId/deployments" || !value.params?.teamId) {
+      if (typeof value.route !== "string" || !isStringRecord(value.params)) {
         return { type: "error", message: "Invalid connect envelope" };
       }
 
@@ -80,4 +80,12 @@ export function parseClientEnvelope<TMessage>(
   } catch {
     return { type: "error", message: "Malformed JSON envelope" };
   }
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => typeof entry === "string");
 }

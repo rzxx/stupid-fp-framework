@@ -1,5 +1,6 @@
 import { executeAction } from "./action";
 import type { Program } from "./program";
+import { serializeResourceKey } from "./resource";
 import { type ClientEnvelope, type ServerEnvelope } from "./stream";
 import { SessionStore } from "./session";
 import { TraceStore, type TraceSnapshot } from "./trace";
@@ -34,7 +35,10 @@ export function createRuntime<
   const sessions = new SessionStore(program.session);
   const traces = new TraceStore();
 
-  async function project(sessionId: string): Promise<RuntimeResult<TProjection>> {
+  async function project(
+    sessionId: string,
+    trace?: TraceSnapshot,
+  ): Promise<RuntimeResult<TProjection>> {
     const session = sessions.get(sessionId);
 
     if (!session) {
@@ -43,12 +47,30 @@ export function createRuntime<
       };
     }
 
-    const projection = await program.screen.project(session, {
-      services: program.services,
-      resources: program.resourceGraph,
-      traces,
-    });
+    const observed = await program.resourceGraph.observe(() =>
+      program.screen.project(session, {
+        services: program.services,
+        resources: program.resourceGraph,
+        traces: traces.scoped(sessionId),
+      }),
+    );
+
+    if (trace) {
+      traces.add(trace, "projection", "resources observed", {
+        resources: observed.observed.map((resource) => resource.label),
+      });
+      traces.add(trace, "projection", "projection recomputed");
+    }
+
+    const projection = observed.value;
     const projectionVersion = sessions.bumpProjection(session);
+
+    if (trace) {
+      traces.add(trace, "stream", "projection streamed", {
+        projectionVersion,
+        observedResources: observed.observed.map((resource) => resource.label),
+      });
+    }
 
     return {
       envelopes: [
@@ -89,7 +111,9 @@ export function createRuntime<
         };
       }
 
-      const trace = traces.start(envelope.message.type);
+      const trace = traces.start(envelope.message.type, {
+        scopeId: session.sessionId,
+      });
       traces.add(trace, "message", "message received", {
         messageType: envelope.message.type,
       });
@@ -99,9 +123,8 @@ export function createRuntime<
       if (!action) {
         sessions.update(session, envelope.message as TSessionMessage);
         traces.add(trace, "session", `${envelope.message.type} applied`);
+        const projected = await project(session.sessionId, trace);
         traces.complete(trace);
-        traces.add(trace, "projection", "projection recomputed");
-        const projected = await project(session.sessionId);
 
         return {
           envelopes: [
@@ -121,8 +144,14 @@ export function createRuntime<
 
       program.resourceGraph.invalidate(result.invalidated);
 
-      traces.add(trace, "projection", "projection recomputed");
-      const projected = await project(session.sessionId);
+      traces.add(trace, "resource", "resources invalidated", {
+        resources: result.invalidated.map((key) => serializeResourceKey(key).label),
+      });
+      const projected = await project(session.sessionId, trace);
+
+      if (result.ok) {
+        traces.complete(trace);
+      }
 
       return {
         envelopes: [

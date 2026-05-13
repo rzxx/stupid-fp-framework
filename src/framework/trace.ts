@@ -27,18 +27,24 @@ export type TraceSnapshot = {
   traceId: string;
   label: string;
   status: TraceStatus;
+  scopeId?: string;
   events: TraceEvent[];
+};
+
+export type TraceReader = {
+  list: () => TraceSnapshot[];
 };
 
 export class TraceStore {
   readonly #traces: TraceSnapshot[] = [];
   #nextId = 1;
 
-  start(label: string): TraceSnapshot {
+  start(label: string, options?: { scopeId?: string }): TraceSnapshot {
     const trace: TraceSnapshot = {
       traceId: `trace-${this.#nextId++}`,
       label,
       status: "running",
+      scopeId: options?.scopeId,
       events: [],
     };
 
@@ -64,10 +70,18 @@ export class TraceStore {
     this.add(trace, "error", message);
   }
 
-  list(): TraceSnapshot[] {
-    return this.#traces.map((trace) => ({
-      ...trace,
-      events: [...trace.events],
-    }));
+  list(scopeId?: string): TraceSnapshot[] {
+    return this.#traces
+      .filter((trace) => !scopeId || trace.scopeId === scopeId)
+      .map((trace) => ({
+        ...trace,
+        events: [...trace.events],
+      }));
+  }
+
+  scoped(scopeId: string): TraceReader {
+    return {
+      list: () => this.list(scopeId),
+    };
   }
 }

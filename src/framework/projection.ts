@@ -1,12 +1,12 @@
 import type { JsonRecord } from "./json";
 import type { ResourceGraph } from "./resource";
 import type { Session } from "./session";
-import type { TraceStore } from "./trace";
+import type { TraceReader } from "./trace";
 
 export type ProjectionContext<TServices> = {
   services: TServices;
   resources: ResourceGraph<TServices>;
-  traces: TraceStore;
+  traces: TraceReader;
 };
 
 export type ScreenDefinition<TServices, TSessionState, TProjection> = {

@@ -7,10 +7,9 @@ export type ResourceKey<TValue = unknown> = {
   readonly __value?: TValue;
 };
 
-export type ResourceLoader<TServices, TValue> = (
-  services: TServices,
-  key: ResourceKey<TValue>,
-) => Promise<TValue> | TValue;
+export type ResourceLoader<TServices, TValue> = {
+  load(services: TServices, key: ResourceKey<TValue>): Promise<TValue> | TValue;
+}["load"];
 
 export type ResourceDefinition<TServices, TValue> = {
   readonly type: string;
@@ -26,6 +25,10 @@ export type SerializedResourceKey = {
   type: string;
   id: string;
   label: string;
+};
+
+export type ResourceObservation = {
+  key: SerializedResourceKey;
 };
 
 export function resourceKey<TValue>(
@@ -54,12 +57,15 @@ export function defineResource<TServices, TValue>(
 export class ResourceGraph<TServices> {
   readonly #definitions = new Map<string, ResourceDefinition<TServices, unknown>>();
   readonly #cache = new Map<string, ResourceSnapshot>();
+  readonly #observers: Array<(key: ResourceKey) => void> = [];
 
   register<TValue>(definition: ResourceDefinition<TServices, TValue>): void {
     this.#definitions.set(definition.type, definition as ResourceDefinition<TServices, unknown>);
   }
 
   async read<TValue>(services: TServices, key: ResourceKey<TValue>): Promise<TValue> {
+    this.#recordObservation(key);
+
     const id = resourceKeyId(key);
     const cached = this.#cache.get(id);
 
@@ -86,6 +92,31 @@ export class ResourceGraph<TServices> {
 
   clear(): void {
     this.#cache.clear();
+  }
+
+  async observe<TValue>(
+    read: () => Promise<TValue> | TValue,
+  ): Promise<{ value: TValue; observed: SerializedResourceKey[] }> {
+    const observed = new Map<string, SerializedResourceKey>();
+
+    this.#observers.push((key) => {
+      observed.set(resourceKeyId(key), serializeResourceKey(key));
+    });
+
+    try {
+      const value = await read();
+      return { value, observed: [...observed.values()] };
+    } finally {
+      this.#observers.pop();
+    }
+  }
+
+  #recordObservation(key: ResourceKey): void {
+    const observer = this.#observers.at(-1);
+
+    if (observer) {
+      observer(key);
+    }
   }
 }
 

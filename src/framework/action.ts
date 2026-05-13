@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect } from "./effect";
 import type { JsonRecord } from "./json";
 import type { ResourceKey } from "./resource";
 import type { TraceSnapshot, TraceStore } from "./trace";
@@ -17,9 +17,13 @@ export type ActionContext<TServices> = {
 
 export type ActionEffect = Effect.Effect<void, ActionFailure, never>;
 
+type ActionRunner<TServices, TMessage> = {
+  run(message: TMessage, context: ActionContext<TServices>): ActionEffect;
+}["run"];
+
 export type ActionDefinition<TServices, TMessage> = {
   type: string;
-  run: (message: TMessage, context: ActionContext<TServices>) => ActionEffect;
+  run: ActionRunner<TServices, TMessage>;
 };
 
 export type ActionExecution = {
@@ -70,6 +74,5 @@ export async function executeAction<TServices, TMessage extends { type: string }
     return { ok: false, error: message, invalidated };
   }
 
-  traces.complete(trace);
   return { ok: true, invalidated };
 }
