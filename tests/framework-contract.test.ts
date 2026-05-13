@@ -11,6 +11,7 @@ import {
   JsonFileRuntimeStore,
   MemoryRuntimeStore,
   parseClientEnvelope,
+  ResourceGraph,
   resourceKey,
   type ProjectionEnvelope,
   type RuntimeStore,
@@ -96,6 +97,40 @@ describe("framework contract", () => {
     ]);
   });
 
+  test("concurrent resource observation keeps regions isolated per projection", async () => {
+    const graph = new ResourceGraph<Services>();
+    graph.register(
+      defineResource<Services, number>("Counter", async (services, key) => {
+        if (key.id === "slow") {
+          await delay(10);
+        }
+
+        return services.counter.value;
+      }),
+    );
+    const services = createServices();
+    const slowKey = resourceKey<number>("Counter", "slow");
+    const fastKey = resourceKey<number>("Counter", "fast");
+
+    const [slow, fast] = await Promise.all([
+      graph.observe(() => graph.region("slow-region", () => graph.read(services, slowKey))),
+      graph.observe(() => graph.region("fast-region", () => graph.read(services, fastKey))),
+    ]);
+
+    expect(slow.regions).toEqual([
+      {
+        id: "slow-region",
+        resources: [{ type: "Counter", id: "slow", label: "Counter(slow)" }],
+      },
+    ]);
+    expect(fast.regions).toEqual([
+      {
+        id: "fast-region",
+        resources: [{ type: "Counter", id: "fast", label: "Counter(fast)" }],
+      },
+    ]);
+  });
+
   test("session messages change ephemeral session state without changing durable resources", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
@@ -114,6 +149,24 @@ describe("framework contract", () => {
     expect(trace.status).toBe("success");
     expect(trace.events.map((event) => event.label)).toContain("resources observed");
     expect(trace.events.map((event) => event.label)).toContain("projection streamed");
+  });
+
+  test("unknown messages are rejected instead of being treated as session updates", async () => {
+    const runtime = createCounterRuntime();
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.unknown" } as unknown as SessionMessage,
+    });
+
+    expect(result.envelopes[0]).toMatchObject({
+      type: "error",
+      sessionId: connected.sessionId,
+      message: "Unknown message type: session.unknown",
+    });
+    expect(latestTrace(result.envelopes).trace.status).toBe("error");
   });
 
   test("actions invalidate typed resources and projection observes the recomputed resource", async () => {
@@ -331,6 +384,18 @@ describe("framework contract", () => {
       ),
     ).toMatchObject({ type: "error", message: "Invalid connect envelope" });
   });
+
+  test("stream parser rejects message payloads without a string type", () => {
+    expect(
+      parseClientEnvelope(
+        JSON.stringify({
+          type: "message",
+          sessionId: "session-1",
+          message: { payload: true },
+        }),
+      ),
+    ).toMatchObject({ type: "error", message: "Invalid message envelope" });
+  });
 });
 
 function createServices(): Services {
@@ -351,6 +416,8 @@ function createCounterRuntime(
     resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
     session: {
       init: () => ({ selected: false }),
+      accepts: (message): message is SessionMessage =>
+        isMessage(message) && message.type === "session.toggle",
       update: (state, message) => {
         if (message.type === "session.toggle") {
           return { selected: !state.selected };
@@ -498,4 +565,14 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Proj
       envelope: { type: "projection:update" },
     },
   ]);
+}
+
+function isMessage(value: unknown): value is { type: string } {
+  return (
+    value !== null && typeof value === "object" && "type" in value && typeof value.type === "string"
+  );
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

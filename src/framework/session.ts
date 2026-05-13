@@ -12,6 +12,7 @@ export type Session<TState> = {
 
 export type SessionDefinition<TState, TMessage> = {
   init: () => TState;
+  accepts: (message: unknown) => message is TMessage;
   update: (state: TState, message: TMessage) => TState;
 };
 

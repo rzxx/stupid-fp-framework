@@ -166,6 +166,21 @@ export function createRuntime<
       const action = program.actionByType.get(envelope.message.type);
 
       if (!action) {
+        if (!program.session.accepts(envelope.message)) {
+          traces.fail(trace, `Unknown message type: ${envelope.message.type}`);
+          return {
+            envelopes: [
+              {
+                type: "error",
+                sessionId: session.sessionId,
+                traceId: trace.traceId,
+                message: `Unknown message type: ${envelope.message.type}`,
+              },
+              await traceEnvelope(session, trace),
+            ],
+          };
+        }
+
         sessions.update(session, envelope.message as TSessionMessage);
         traces.add(trace, "session", `${envelope.message.type} applied`);
         const projected = await project(session.sessionId, trace);

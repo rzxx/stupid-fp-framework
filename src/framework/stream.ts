@@ -108,7 +108,7 @@ export function parseClientEnvelope<TMessage>(
     }
 
     if (value.type === "message") {
-      if (!value.sessionId || !value.message) {
+      if (typeof value.sessionId !== "string" || !isMessagePayload(value.message)) {
         return { type: "error", message: "Invalid message envelope" };
       }
 
@@ -119,6 +119,16 @@ export function parseClientEnvelope<TMessage>(
   } catch {
     return { type: "error", message: "Malformed JSON envelope" };
   }
+}
+
+function isMessagePayload(value: unknown): value is { type: string } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    typeof value.type === "string"
+  );
 }
 
 function isResume(value: unknown): value is ConnectEnvelope["resume"] {

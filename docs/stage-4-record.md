@@ -30,8 +30,10 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 - `JsonFileRuntimeStore` remains a dev/test adapter, not the app persistence model.
 - React integration should become an adapter surface without introducing client cache ownership.
 - Resume now keeps the old `resumed` boolean for client compatibility, but the durable semantic field is `connected.resume`.
+- Session message handling is now explicit through `SessionDefinition.accepts`; unknown messages fail at the kernel boundary.
 
 ## Progress
 
 - Stage 1 done: restored formatting hygiene, confirmed `bun test` and `bun run check` pass.
 - Stage 2 done: added explicit resume statuses, cursor-history replay, stale-cursor refresh, route-mismatch rejection, and contract tests.
+- Stage 3 done: moved resource observation to async-local scopes, added explicit invalid-message rejection, and covered parser payload validation.

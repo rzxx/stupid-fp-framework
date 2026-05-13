@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { JsonValue } from "./json";
 import type { ProjectionRegionSnapshot } from "./projection";
 
@@ -64,7 +65,7 @@ export function defineResource<TServices, TValue>(
 export class ResourceGraph<TServices> {
   readonly #definitions = new Map<string, ResourceDefinition<TServices, unknown>>();
   readonly #cache = new Map<string, ResourceSnapshot>();
-  readonly #observers: ResourceObservationScope[] = [];
+  readonly #observerStorage = new AsyncLocalStorage<ResourceObservationScope>();
 
   register<TValue>(definition: ResourceDefinition<TServices, TValue>): void {
     this.#definitions.set(definition.type, definition as ResourceDefinition<TServices, unknown>);
@@ -109,10 +110,8 @@ export class ResourceGraph<TServices> {
       regions: new Map(),
     };
 
-    this.#observers.push(scope);
-
-    try {
-      const value = await read();
+    return this.#observerStorage.run(scope, async () => {
+      const value = await Promise.resolve(read());
       const regions = [...scope.regions.entries()].map(([id, resources]) => ({
         id,
         resources: [...resources.values()],
@@ -120,13 +119,11 @@ export class ResourceGraph<TServices> {
       const observed = uniqueResources(regions);
 
       return { value, observed, regions };
-    } finally {
-      this.#observers.pop();
-    }
+    });
   }
 
   async region<TValue>(id: string, read: () => Promise<TValue> | TValue): Promise<TValue> {
-    const observer = this.#observers.at(-1);
+    const observer = this.#observerStorage.getStore();
 
     if (!observer) {
       return read();
@@ -143,7 +140,7 @@ export class ResourceGraph<TServices> {
   }
 
   #recordObservation(key: ResourceKey): void {
-    const observer = this.#observers.at(-1);
+    const observer = this.#observerStorage.getStore();
 
     if (observer) {
       let resources = observer.regions.get(observer.regionId);
