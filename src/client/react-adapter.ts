@@ -68,7 +68,9 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
           setCursor(envelope.cursor);
 
           if (options.projectionTraces) {
-            setTraces(options.projectionTraces(envelope.projection));
+            setTraces((current) =>
+              mergeTraces(current, options.projectionTraces?.(envelope.projection) ?? []),
+            );
           }
         },
         onPatch(envelope) {
@@ -84,7 +86,7 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
               const next = options.applyPatch?.(current, envelope) ?? current;
 
               if (options.projectionTraces) {
-                setTraces(options.projectionTraces(next));
+                setTraces((traces) => mergeTraces(traces, options.projectionTraces?.(next) ?? []));
               }
 
               setProjectionVersion(envelope.projectionVersion);
@@ -128,4 +130,11 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
 function mergeTrace<TTrace extends { traceId: string }>(current: TTrace[], next: TTrace): TTrace[] {
   const withoutNext = current.filter((trace) => trace.traceId !== next.traceId);
   return [next, ...withoutNext];
+}
+
+function mergeTraces<TTrace extends { traceId: string }>(
+  current: TTrace[],
+  next: TTrace[],
+): TTrace[] {
+  return [...next].reverse().reduce((traces, trace) => mergeTrace(traces, trace), current);
 }
