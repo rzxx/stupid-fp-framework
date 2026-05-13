@@ -1,0 +1,143 @@
+import { executeAction } from "./action";
+import type { Program } from "./program";
+import { type ClientEnvelope, type ServerEnvelope } from "./stream";
+import { SessionStore } from "./session";
+import { TraceStore, type TraceSnapshot } from "./trace";
+
+export type RuntimeResult<TProjection> = {
+  envelopes: ServerEnvelope<TProjection, TraceSnapshot>[];
+};
+
+export type Runtime<
+  TSessionMessage extends { type: string },
+  TActionMessage extends { type: string },
+  TProjection,
+> = {
+  connect: (
+    envelope: Extract<ClientEnvelope<TSessionMessage | TActionMessage>, { type: "connect" }>,
+  ) => Promise<RuntimeResult<TProjection>>;
+  receive: (
+    envelope: Extract<ClientEnvelope<TSessionMessage | TActionMessage>, { type: "message" }>,
+  ) => Promise<RuntimeResult<TProjection>>;
+  traces: TraceStore;
+};
+
+export function createRuntime<
+  TServices,
+  TSessionState,
+  TSessionMessage extends { type: string },
+  TActionMessage extends { type: string },
+  TProjection,
+>(
+  program: Program<TServices, TSessionState, TSessionMessage, TActionMessage, TProjection>,
+): Runtime<TSessionMessage, TActionMessage, TProjection> {
+  const sessions = new SessionStore(program.session);
+  const traces = new TraceStore();
+
+  async function project(sessionId: string): Promise<RuntimeResult<TProjection>> {
+    const session = sessions.get(sessionId);
+
+    if (!session) {
+      return {
+        envelopes: [{ type: "error", sessionId, message: "Unknown session" }],
+      };
+    }
+
+    const projection = await program.screen.project(session, {
+      services: program.services,
+      resources: program.resourceGraph,
+      traces,
+    });
+    const projectionVersion = sessions.bumpProjection(session);
+
+    return {
+      envelopes: [
+        {
+          type: "projection:update",
+          sessionId,
+          projectionVersion,
+          projection,
+        },
+      ],
+    };
+  }
+
+  return {
+    traces,
+
+    async connect(envelope) {
+      const session = sessions.create(envelope.route, envelope.params);
+      const initial = await project(session.sessionId);
+
+      return {
+        envelopes: [{ type: "connected", sessionId: session.sessionId }, ...initial.envelopes],
+      };
+    },
+
+    async receive(envelope) {
+      const session = sessions.get(envelope.sessionId);
+
+      if (!session) {
+        return {
+          envelopes: [
+            {
+              type: "error",
+              sessionId: envelope.sessionId,
+              message: "Unknown session",
+            },
+          ],
+        };
+      }
+
+      const trace = traces.start(envelope.message.type);
+      traces.add(trace, "message", "message received", {
+        messageType: envelope.message.type,
+      });
+
+      const action = program.actionByType.get(envelope.message.type);
+
+      if (!action) {
+        sessions.update(session, envelope.message as TSessionMessage);
+        traces.add(trace, "session", `${envelope.message.type} applied`);
+        traces.complete(trace);
+        const projected = await project(session.sessionId);
+        traces.add(trace, "projection", "projection recomputed");
+
+        return {
+          envelopes: [
+            { type: "trace:update", sessionId: session.sessionId, trace },
+            ...projected.envelopes,
+          ],
+        };
+      }
+
+      const result = await executeAction(
+        action,
+        envelope.message as TActionMessage,
+        program.services,
+        traces,
+        trace,
+      );
+
+      program.resourceGraph.invalidate(result.invalidated);
+
+      const projected = await project(session.sessionId);
+      traces.add(trace, "projection", "projection recomputed");
+
+      return {
+        envelopes: [
+          {
+            type: "action:result",
+            sessionId: session.sessionId,
+            traceId: trace.traceId,
+            action: envelope.message.type.replace(/^action\./, ""),
+            ok: result.ok,
+            error: result.error,
+          },
+          { type: "trace:update", sessionId: session.sessionId, trace },
+          ...projected.envelopes,
+        ],
+      };
+    },
+  };
+}
