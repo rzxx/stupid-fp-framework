@@ -26,10 +26,21 @@ This stage does not implement React Flight or a full framework UI tree. It estab
 - Added trace events for streamed region patches.
 - Made the browser stream client injectable for WebSocket and storage, enabling implementation-light client contract tests.
 - Fixed React trace merging so live trace updates are not clobbered or reordered by projection-derived trace snapshots.
+- Changed normal runtime updates to patch-first behavior:
+  - session messages now emit `projection:patch`
+  - successful action/resource invalidations emit `projection:patch`
+  - failed actions do not emit projection updates
+  - full `projection:update` remains for connect/resume/recovery
+- Added a typed stream bootstrap shape for initial browser state.
+- Added Bun host initial rendering support:
+  - the host can resolve an HTTP request to a program route/params
+  - it connects the runtime, builds bootstrap state, renders HTML, and injects bootstrap JSON into the shell
+- Split the approval UI into a reusable `ApprovalApp`, a browser hydration entry, and a server render adapter.
+- Wired the browser client to prefer bootstrap resume state over stored resume state.
 
 ## Verification
 
-- `bun test`: 31 tests pass.
+- `bun test`: 33 tests pass.
 - `bun run check`: typecheck, lint, and format check pass.
 - Browser smoke on local Bun host port 3100:
   - loaded approval demo
@@ -38,10 +49,16 @@ This stage does not implement React Flight or a full framework UI tree. It estab
   - observed pending list/detail update
   - observed action trace with `region patch streamed`
   - reloaded into `refreshed` resume state
+- Browser smoke on local Bun host port 3000 after snapshot/bootstrap work:
+  - loaded server-rendered approval HTML
+  - hydrated into an open stream using bootstrap resume state
+  - selected a deployment through a session patch
+  - approved it through an action/resource patch
+  - observed pending list/detail/trace update without a normal full projection
+  - browser warning/error log was empty
 
 ## Remaining Stage 5 Follow-Ups
 
 - Decide whether the next patch layer should be a framework-owned UI tree or a Flight-style adapter spike.
-- Reduce reliance on full `projection:update` as normal post-patch output once recovery semantics are clearer.
 - Add projection/resource failure behavior.
 - Add a live resource or process-resource demo slice after patch delivery is no longer scaffold.

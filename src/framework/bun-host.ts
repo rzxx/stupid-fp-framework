@@ -1,6 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { parseClientEnvelope, type ClientEnvelope, type ServerEnvelope } from "./stream";
+import {
+  parseClientEnvelope,
+  type ClientEnvelope,
+  type ConnectedEnvelope,
+  type ProgramStreamBootstrap,
+  type ProjectionEnvelope,
+  type ServerEnvelope,
+  type TraceEnvelope,
+} from "./stream";
 
 export type BunRuntime<TMessage, TProjection, TTrace> = {
   connect: (
@@ -19,6 +27,15 @@ export type BunProgramHostOptions<TMessage, TProjection, TTrace> = {
   stylesPath?: string;
   outdir?: string;
   port?: number;
+  initialRender?: {
+    resolve: (request: Request) =>
+      | {
+          route: string;
+          params: Record<string, string>;
+        }
+      | undefined;
+    render: (bootstrap: ProgramStreamBootstrap<TProjection, TTrace>) => string | Promise<string>;
+  };
 };
 
 export async function serveBunProgram<TMessage, TProjection, TTrace>(
@@ -55,9 +72,26 @@ export async function serveBunProgram<TMessage, TProjection, TTrace>(
         });
       }
 
-      return new Response(Bun.file(options.shellPath), {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+      if (options.initialRender) {
+        const route = options.initialRender.resolve(request);
+
+        if (route) {
+          const result = await options.runtime.connect({
+            type: "connect",
+            route: route.route,
+            params: route.params,
+          });
+          const bootstrap = bootstrapFromEnvelopes(result.envelopes);
+          const rendered = await options.initialRender.render(bootstrap);
+          const shell = await Bun.file(options.shellPath).text();
+
+          return new Response(injectInitialRender(shell, rendered, bootstrap), {
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+      }
+
+      return htmlFile(options.shellPath);
     },
     websocket: {
       async message(socket, payload) {
@@ -79,6 +113,61 @@ export async function serveBunProgram<TMessage, TProjection, TTrace>(
         delivery.close(socket);
       },
     },
+  });
+}
+
+function bootstrapFromEnvelopes<TProjection, TTrace>(
+  envelopes: ServerEnvelope<TProjection, TTrace>[],
+): ProgramStreamBootstrap<TProjection, TTrace> {
+  const connected = envelopes.find(
+    (envelope): envelope is ConnectedEnvelope => envelope.type === "connected",
+  );
+  const projection = envelopes.find(
+    (envelope): envelope is ProjectionEnvelope<TProjection> =>
+      envelope.type === "projection:update",
+  );
+
+  if (!connected || !projection) {
+    throw new Error("Initial render requires connected and projection envelopes");
+  }
+
+  return {
+    sessionId: connected.sessionId,
+    cursor: projection.cursor,
+    resumed: connected.resumed,
+    resume: connected.resume,
+    projectionVersion: projection.projectionVersion,
+    projection: projection.projection,
+    traces: envelopes
+      .filter((envelope): envelope is TraceEnvelope<TTrace> => envelope.type === "trace:update")
+      .map((envelope) => envelope.trace),
+  };
+}
+
+function injectInitialRender<TProjection, TTrace>(
+  shell: string,
+  html: string,
+  bootstrap: ProgramStreamBootstrap<TProjection, TTrace>,
+): string {
+  const script = `<script>window.__STUPID_FP_BOOTSTRAP__=${serializeBootstrap(bootstrap)};</script>`;
+  const root = '<div id="root"></div>';
+
+  if (shell.includes(root)) {
+    return shell.replace(root, `<div id="root">${html}</div>${script}`);
+  }
+
+  return shell.replace("</body>", `${script}</body>`);
+}
+
+function serializeBootstrap<TProjection, TTrace>(
+  bootstrap: ProgramStreamBootstrap<TProjection, TTrace>,
+): string {
+  return JSON.stringify(bootstrap).replaceAll("<", "\\u003c");
+}
+
+function htmlFile(path: string): Response {
+  return new Response(Bun.file(path), {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
   });
 }
 

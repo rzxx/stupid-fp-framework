@@ -99,6 +99,59 @@ describe("program stream client", () => {
       }),
     );
   });
+
+  test("uses bootstrap resume state before stored resume state", () => {
+    const socket = new FakeSocket();
+    const storage = new MemoryStorage({
+      "stream-state": JSON.stringify({
+        sessionId: "session-old",
+        cursor: "cursor-old",
+      }),
+    });
+
+    connectProgramStream<TestMessage, TestProjection, TestTrace>({
+      route: "/contract",
+      params: { id: "main" },
+      storageKey: "stream-state",
+      bootstrap: {
+        sessionId: "session-boot",
+        cursor: "cursor-boot",
+        resumed: false,
+        resume: { status: "fresh" },
+        projectionVersion: 1,
+        projection: { count: 0 },
+        traces: [],
+      },
+      environment: {
+        streamUrl: "ws://test/stream",
+        createSocket: () => socket,
+        storage,
+      },
+      handlers: {
+        onConnectionState: () => undefined,
+        onSession: () => undefined,
+        onProjection: () => undefined,
+        onPatch: () => undefined,
+        onTrace: () => undefined,
+        onActionResult: () => undefined,
+        onError: () => undefined,
+      },
+    });
+
+    socket.open();
+
+    expect(socket.sent[0]).toEqual(
+      JSON.stringify({
+        type: "connect",
+        route: "/contract",
+        params: { id: "main" },
+        resume: {
+          sessionId: "session-boot",
+          cursor: "cursor-boot",
+        },
+      }),
+    );
+  });
 });
 
 class FakeSocket implements ProgramStreamSocket {

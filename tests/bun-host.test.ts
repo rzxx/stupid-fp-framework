@@ -85,6 +85,45 @@ describe("Bun host stream delivery", () => {
       server.stop(true);
     }
   });
+
+  test("can render an initial HTML snapshot with stream bootstrap state", async () => {
+    const root = join(tmpdir(), `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    await writeFile(clientEntry, "console.log('host test');\n");
+    await writeFile(
+      shellPath,
+      '<html><body><div id="root"></div><script type="module" src="/client.js"></script></body></html>',
+    );
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir: join(root, "dist"),
+      port: 0,
+      initialRender: {
+        resolve: () => ({ route: "/test", params: { id: "initial" } }),
+        render: (bootstrap) =>
+          `<main data-session="${bootstrap.sessionId}">${bootstrap.projection.value}</main>`,
+      },
+    });
+
+    try {
+      const response = await fetch(`http://localhost:${server.port}/`);
+      const html = await response.text();
+
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(html).toContain('<div id="root"><main data-session="session-initial">0</main></div>');
+      expect(html).toContain("window.__STUPID_FP_BOOTSTRAP__=");
+      expect(html).toContain('"sessionId":"session-initial"');
+      expect(html).toContain('"projectionVersion":1');
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 function createFanoutRuntime() {

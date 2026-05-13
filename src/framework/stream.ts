@@ -81,6 +81,16 @@ export type ProjectionPatchEnvelope = {
   causedByTraceId?: string;
 };
 
+export type ProgramStreamBootstrap<TProjection, TTrace> = {
+  sessionId: string;
+  cursor: string;
+  resumed: boolean;
+  resume: ResumeResult;
+  projectionVersion: number;
+  projection: TProjection;
+  traces: TTrace[];
+};
+
 export type ActionResultEnvelope = {
   type: "action:result";
   sessionId: string;

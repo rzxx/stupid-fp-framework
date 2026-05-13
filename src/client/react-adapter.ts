@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   ActionResultEnvelope,
   ErrorEnvelope,
+  ProgramStreamBootstrap,
   ProjectionPatchEnvelope,
   ResumeResult,
 } from "../framework";
@@ -15,6 +16,7 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
   route: string;
   params: Record<string, string>;
   storageKey?: string;
+  bootstrap?: ProgramStreamBootstrap<TProjection, TTrace>;
   projectionTraces?: (projection: TProjection) => TTrace[];
   applyPatch?: (projection: TProjection, envelope: ProjectionPatchEnvelope) => TProjection;
 };
@@ -39,13 +41,17 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
 ): ProgramStreamReactState<TMessage, TProjection, TTrace> {
   const stream = useRef<ProgramStreamClient<TMessage> | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [resumed, setResumed] = useState(false);
-  const [resume, setResume] = useState<ResumeResult | null>(null);
-  const [projection, setProjection] = useState<TProjection | null>(null);
-  const [projectionVersion, setProjectionVersion] = useState(0);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [traces, setTraces] = useState<TTrace[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(options.bootstrap?.sessionId ?? null);
+  const [resumed, setResumed] = useState(options.bootstrap?.resumed ?? false);
+  const [resume, setResume] = useState<ResumeResult | null>(options.bootstrap?.resume ?? null);
+  const [projection, setProjection] = useState<TProjection | null>(
+    options.bootstrap?.projection ?? null,
+  );
+  const [projectionVersion, setProjectionVersion] = useState(
+    options.bootstrap?.projectionVersion ?? 0,
+  );
+  const [cursor, setCursor] = useState<string | null>(options.bootstrap?.cursor ?? null);
+  const [traces, setTraces] = useState<TTrace[]>(options.bootstrap?.traces ?? []);
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
   const [lastPatch, setLastPatch] = useState<ProjectionPatchEnvelope | null>(null);
@@ -55,6 +61,7 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
       route: options.route,
       params: options.params,
       storageKey: options.storageKey,
+      bootstrap: options.bootstrap,
       handlers: {
         onConnectionState: setConnection,
         onSession(nextSessionId, nextResumed, nextResume) {

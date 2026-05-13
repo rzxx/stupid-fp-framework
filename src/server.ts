@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { JsonFileRuntimeStore, serveBunProgram, type TraceSnapshot } from "./framework";
 import { createApprovalRuntime } from "./demo/approvals/program";
 import type { ApprovalClientMessage, ApprovalProjection } from "./demo/approvals/types";
+import { renderApprovalApp } from "./client/render-approval";
 
 const root = import.meta.dir;
 const runtime = createApprovalRuntime({
@@ -18,6 +19,13 @@ const server = await serveBunProgram<ApprovalClientMessage, ApprovalProjection, 
   shellPath: join(root, "shell.html"),
   stylesPath: join(root, "client", "styles.css"),
   port,
+  initialRender: {
+    resolve: () => ({
+      route: "/teams/:teamId/deployments",
+      params: { teamId: "team-platform" },
+    }),
+    render: renderApprovalApp,
+  },
 });
 
 // eslint-disable-next-line no-console

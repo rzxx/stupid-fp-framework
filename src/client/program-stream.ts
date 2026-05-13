@@ -2,6 +2,7 @@ import type {
   ActionResultEnvelope,
   ClientEnvelope,
   ErrorEnvelope,
+  ProgramStreamBootstrap,
   ProjectionPatchEnvelope,
   ProjectionEnvelope,
   ResumeResult,
@@ -25,6 +26,7 @@ export type ProgramStreamOptions<TProjection, TTrace> = {
   route: string;
   params: Record<string, string>;
   storageKey?: string;
+  bootstrap?: ProgramStreamBootstrap<TProjection, TTrace>;
   handlers: ProgramStreamHandlers<TProjection, TTrace>;
   environment?: ProgramStreamEnvironment;
 };
@@ -60,12 +62,18 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
 
   socket.addEventListener("open", () => {
     options.handlers.onConnectionState("open");
-    const resume = readResume(options.storageKey, options.environment?.storage);
+    const resume =
+      options.bootstrap ?? readResume(options.storageKey, options.environment?.storage);
     sendEnvelope<TMessage>(socket, {
       type: "connect",
       route: options.route,
       params: options.params,
-      resume,
+      resume: resume
+        ? {
+            sessionId: resume.sessionId,
+            cursor: resume.cursor,
+          }
+        : undefined,
     });
   });
 
