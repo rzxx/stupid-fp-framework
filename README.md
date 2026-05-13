@@ -28,7 +28,7 @@ No API layer. No client-side cache. No manual sync. Just a server that _is_ the 
 - A **Bun-native** framework (no webpack, no vite, no node — just `bun --hot`)
 - **Effect-powered** backend — typed, composable, testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
-- **Session-per-tab** — each browser gets a durable server session with reconnect + replay
+- **Session-per-tab** — each browser gets a restorable server session with reconnect + replay
 - **Reactive by default** — actions invalidate resources, runtime pushes patches to all affected clients
 - **Elm-like message discipline** — UI sends typed messages, server handles everything
 - **Causally traced** — every action leaves a trace; debugging is actually pleasant
@@ -53,35 +53,52 @@ You define three things:
 The runtime wires them together. When an action runs, it invalidates resources. The runtime figures out which sessions are affected, recomputes their projections, and pushes UI patches over WebSocket. React just renders.
 
 ```ts
-// A resource — just a type + a loader
-const PendingDeployments = defineResource("PendingDeployments", (svc, key) =>
-  svc.deployments.pending(key.id),
+class Deployments extends Context.Tag("Deployments")<
+  Deployments,
+  {
+    pending: (teamId: string) => Deployment[];
+    approve: (deploymentId: string) => Deployment;
+  }
+>() {}
+
+// A resource — typed key + Effect-native loader
+const PendingDeployments = defineResource("PendingDeployments", (key) =>
+  Effect.gen(function* () {
+    const deployments = yield* Deployments;
+    return deployments.pending(key.id);
+  }),
 );
 
-// An action — like a mutation that says what it invalidates
-const approveDeployment = defineAction(
-  "action.approveDeployment",
-  accepts<{ deploymentId: string }>(),
-  (msg, ctx) =>
+// An action — schema-backed input + Effect transaction
+const approveDeployment = Action.define("action.approveDeployment")
+  .input(
+    Schema.Struct({
+      type: Schema.Literal("action.approveDeployment"),
+      deploymentId: Schema.String,
+    }),
+  )
+  .run((msg, ctx) =>
     Effect.gen(function* () {
-      yield* ctx.services.auth.checkRole("approver");
-      yield* ctx.services.deployments.approve(msg.deploymentId);
+      const deployments = yield* Deployments;
+      const deployment = yield* Effect.sync(() => deployments.approve(msg.deploymentId));
       ctx.invalidate(PendingDeployments.key(deployment.teamId));
       ctx.invalidate(Deployment.key(msg.deploymentId));
     }),
-);
+  );
 
 // A screen — reads resources in named regions
 const screen = {
-  route: "/",
-  project: async (session, ctx) => ({
-    pending: await ctx.region("pendingDeployments", () =>
-      ctx.resources.read(svc, PendingDeployments.key(session.state.teamId)),
-    ),
-    selected: await ctx.region("selectedDeployment", () =>
-      ctx.resources.read(svc, Deployment.key(session.state.selectedDeploymentId)),
-    ),
+  route: Route.define("/teams/:teamId/deployments", {
+    params: Schema.Struct({ teamId: Schema.String }),
   }),
+  project: (session, ctx) =>
+    Effect.gen(function* () {
+      return {
+        pending: yield* ctx.region("pendingDeployments", () =>
+          ctx.resources.read(PendingDeployments.key(session.params.teamId)),
+        ),
+      };
+    }),
 };
 ```
 
@@ -99,7 +116,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
-bun test          # runs 38 contract + integration + acceptance tests
+bun test          # runs 42 contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
 ```
@@ -108,9 +125,10 @@ bun check         # typecheck + lint + format check
 
 ## project status
 
-This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 38 of them). But it's:
+This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 42 of them). But it's:
 
 - Not optimized for production
+- Runtime stores are contract-tested development adapters, not production durability adapters yet
 - Not packaged for npm
 - Not API-stable (everything can change)
 - **Real enough to explore the idea** — run the demo, read the source, see if the paradigm clicks

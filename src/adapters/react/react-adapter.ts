@@ -22,17 +22,31 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
 };
 
 export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
-  connection: ConnectionState;
-  sessionId: string | null;
-  resumed: boolean;
-  resume: ResumeResult | null;
-  projection: TProjection | null;
-  projectionVersion: number;
-  cursor: string | null;
-  traces: TTrace[];
-  lastResult: ActionResultEnvelope | null;
-  lastError: ErrorEnvelope | null;
-  lastPatch: ProjectionPatchEnvelope | null;
+  connection: {
+    status: ConnectionState;
+  };
+  session: {
+    id: string | null;
+    resumed: boolean;
+    resume: ResumeResult | null;
+    cursor: string | null;
+  };
+  projection: {
+    value: TProjection | null;
+    version: number;
+  };
+  traces: {
+    visible: TTrace[];
+  };
+  actions: {
+    lastResult: ActionResultEnvelope | null;
+  };
+  errors: {
+    last: ErrorEnvelope | null;
+  };
+  diagnostics: {
+    lastPatch: ProjectionPatchEnvelope | null;
+  };
   send: (message: TMessage) => void;
 };
 
@@ -55,13 +69,21 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
   const [lastPatch, setLastPatch] = useState<ProjectionPatchEnvelope | null>(null);
+  const {
+    route,
+    params,
+    storageKey,
+    bootstrap,
+    projectionTraces,
+    applyPatch: patchProjection,
+  } = options;
 
   useEffect(() => {
     stream.current = connectProgramStream<TMessage, TProjection, TTrace>({
-      route: options.route,
-      params: options.params,
-      storageKey: options.storageKey,
-      bootstrap: options.bootstrap,
+      route,
+      params,
+      storageKey,
+      bootstrap,
       handlers: {
         onConnectionState: setConnection,
         onSession(nextSessionId, nextResumed, nextResume) {
@@ -74,17 +96,15 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
           setProjectionVersion(envelope.projectionVersion);
           setCursor(envelope.cursor);
 
-          if (options.projectionTraces) {
-            setTraces((current) =>
-              mergeTraces(current, options.projectionTraces?.(envelope.projection) ?? []),
-            );
+          if (projectionTraces) {
+            setTraces((current) => mergeTraces(current, projectionTraces(envelope.projection)));
           }
         },
         onPatch(envelope) {
           setCursor(envelope.cursor);
           setLastPatch(envelope);
 
-          if (!options.applyPatch) {
+          if (!patchProjection) {
             setLastError({
               type: "error",
               sessionId: envelope.sessionId,
@@ -92,8 +112,6 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
             });
             return;
           }
-
-          const applyPatch = options.applyPatch;
 
           setProjection((current) => {
             if (!current) {
@@ -108,7 +126,7 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
             let next: TProjection;
 
             try {
-              next = applyPatch(current, envelope);
+              next = patchProjection(current, envelope);
             } catch (error) {
               setLastError({
                 type: "error",
@@ -119,8 +137,8 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
               return current;
             }
 
-            if (options.projectionTraces) {
-              setTraces((traces) => mergeTraces(traces, options.projectionTraces?.(next) ?? []));
+            if (projectionTraces) {
+              setTraces((traces) => mergeTraces(traces, projectionTraces(next)));
             }
 
             setProjectionVersion(envelope.projectionVersion);
@@ -140,20 +158,34 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
     });
 
     return () => stream.current?.close();
-  }, [options]);
+  }, [route, params, storageKey, bootstrap, projectionTraces, patchProjection]);
 
   return {
-    connection,
-    sessionId,
-    resumed,
-    resume,
-    projection,
-    projectionVersion,
-    cursor,
-    traces,
-    lastResult,
-    lastError,
-    lastPatch,
+    connection: {
+      status: connection,
+    },
+    session: {
+      id: sessionId,
+      resumed,
+      resume,
+      cursor,
+    },
+    projection: {
+      value: projection,
+      version: projectionVersion,
+    },
+    traces: {
+      visible: traces,
+    },
+    actions: {
+      lastResult,
+    },
+    errors: {
+      last: lastError,
+    },
+    diagnostics: {
+      lastPatch,
+    },
     send(message) {
       stream.current?.send(message);
     },

@@ -24,6 +24,7 @@ Live sessions matter, but they are not the whole framework. A live session is th
 - [experiments.md](experiments.md): experiment phases, design tensions, non-goals, open questions, acceptance criteria, and next planning step.
 - [../prototype-plan.md](../prototype-plan.md): concrete boundary for the first Bun + React deployment-approval vertical slice.
 - [../kernel-hardening-plan.md](../kernel-hardening-plan.md): current next-stage scope for framework kernel hardening.
+- [../framework-state-review-3.md](../framework-state-review-3.md): Stage 6 audit and decision record for Effect-native services, API, plugins, persistence, and adapter boundaries.
 
 ## How To Use This Set
 

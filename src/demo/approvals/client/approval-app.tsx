@@ -47,8 +47,9 @@ export function ApprovalApp(props: {
     streamOptions,
   );
 
-  const selectedId = stream.projection?.selectedDeployment?.id ?? null;
-  const selectedIsPending = stream.projection?.selectedDeployment?.status === "pending";
+  const projection = stream.projection.value;
+  const selectedId = projection?.selectedDeployment?.id ?? null;
+  const selectedIsPending = projection?.selectedDeployment?.status === "pending";
 
   return (
     <main className="app-shell">
@@ -58,32 +59,34 @@ export function ApprovalApp(props: {
           <h1>Deployment approvals</h1>
         </div>
         <div className="status-strip">
-          <span data-state={stream.connection}>{stream.connection}</span>
-          <span>{stream.sessionId ?? "no session"}</span>
-          <span>{stream.resume?.status ?? (stream.resumed ? "resumed" : "fresh")}</span>
-          <span>{stream.cursor ?? "no cursor"}</span>
-          <span>projection v{stream.projectionVersion}</span>
+          <span data-state={stream.connection.status}>{stream.connection.status}</span>
+          <span>{stream.session.id ?? "no session"}</span>
+          <span>
+            {stream.session.resume?.status ?? (stream.session.resumed ? "resumed" : "fresh")}
+          </span>
+          <span>{stream.session.cursor ?? "no cursor"}</span>
+          <span>projection v{stream.projection.version}</span>
         </div>
       </header>
 
-      {stream.lastError ? <Banner tone="error" text={stream.lastError.message} /> : null}
-      {stream.lastResult ? (
+      {stream.errors.last ? <Banner tone="error" text={stream.errors.last.message} /> : null}
+      {stream.actions.lastResult ? (
         <Banner
-          tone={stream.lastResult.ok ? "success" : "error"}
+          tone={stream.actions.lastResult.ok ? "success" : "error"}
           text={
-            stream.lastResult.ok
+            stream.actions.lastResult.ok
               ? "Approval action completed on the server."
-              : (stream.lastResult.error ?? "Action failed.")
+              : (stream.actions.lastResult.error ?? "Action failed.")
           }
         />
       ) : null}
 
-      {stream.projection ? (
+      {projection ? (
         <section className="workspace">
           <DeploymentList
             filter={deploymentFilter}
             onFilter={setDeploymentFilter}
-            projection={stream.projection}
+            projection={projection}
             selectedId={selectedId}
             onSelect={(deploymentId) =>
               stream.send({
@@ -93,7 +96,7 @@ export function ApprovalApp(props: {
             }
           />
           <DetailPanel
-            projection={stream.projection}
+            projection={projection}
             canApprove={selectedIsPending}
             onApprove={(deploymentId) =>
               stream.send({
@@ -103,8 +106,8 @@ export function ApprovalApp(props: {
             }
           />
           <TracePanel
-            projection={stream.projection}
-            traces={stream.traces}
+            projection={projection}
+            traces={stream.traces.visible}
             onToggle={() => stream.send({ type: "session.toggleTracePanel" })}
           />
         </section>
