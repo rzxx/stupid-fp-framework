@@ -53,3 +53,9 @@ Close the alignment gaps from `docs/framework-state-review.md` by moving Stage 3
 ## Skips
 
 - Action-triggered cross-socket delivery is not complete because the Bun host does not yet keep a session-to-socket registry. The kernel computes/fanouts through `runtime.invalidate()`, while `receive()` only returns envelopes for the initiating session.
+
+## Final Verification
+
+- `bun test`: 28 tests pass.
+- `bun run check`: typecheck, lint, and format check pass.
+- Browser smoke: local Bun host on port 3100 loaded the approval demo, selected a deployment, approved it through the server program, observed the region invalidation trace, and reloaded into an explicit `refreshed` resume state.
