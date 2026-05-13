@@ -1,4 +1,4 @@
-import { Effect } from "./effect";
+import { Effect, type ManagedRuntime } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
 import type { ResourceKey } from "./resource";
 import type { TraceSnapshot, TraceStore } from "./trace";
@@ -8,33 +8,28 @@ export type ActionFailure = {
   detail?: JsonRecord;
 };
 
-export type ActionContext<TServices> = {
-  services: TServices;
+export type ActionContext = {
   trace: TraceSnapshot;
   traces: TraceStore;
   invalidate: (key: ResourceKey) => void;
 };
 
-export type ActionEffect<TResult extends JsonValue | void = void> = Effect.Effect<
+export type ActionEffect<TResult extends JsonValue | void = void, R = never> = Effect.Effect<
   TResult,
   ActionFailure,
-  never
+  R
 >;
 
-type ActionRunner<TServices, TMessage, TResult extends JsonValue | void> = {
-  run(message: TMessage, context: ActionContext<TServices>): ActionEffect<TResult>;
+type ActionRunner<R, TMessage, TResult extends JsonValue | void> = {
+  run(message: TMessage, context: ActionContext): ActionEffect<TResult, R>;
 }["run"];
 
 export type ActionValidator<TMessage> = (message: unknown) => message is TMessage;
 
-export type ActionDefinition<
-  TServices,
-  TMessage,
-  TResult extends JsonValue | void = JsonValue | void,
-> = {
+export type ActionDefinition<R, TMessage, TResult extends JsonValue | void = JsonValue | void> = {
   type: string;
   accepts: ActionValidator<TMessage>;
-  run: ActionRunner<TServices, TMessage, TResult>;
+  run: ActionRunner<R, TMessage, TResult>;
 };
 
 export type ActionExecution = {
@@ -49,27 +44,26 @@ export function actionFailure(message: string, detail?: JsonRecord): ActionFailu
 }
 
 export function defineAction<
-  TServices,
   TMessage extends { type: string },
   TResult extends JsonValue | void = void,
+  R = never,
 >(
   type: TMessage["type"],
   accepts: ActionValidator<TMessage>,
-  run: (message: TMessage, context: ActionContext<TServices>) => ActionEffect<TResult>,
-): ActionDefinition<TServices, TMessage, TResult> {
+  run: (message: TMessage, context: ActionContext) => ActionEffect<TResult, R>,
+): ActionDefinition<R, TMessage, TResult> {
   return { type, accepts, run };
 }
 
-export async function executeAction<TServices, TMessage extends { type: string }>(
-  action: ActionDefinition<TServices, TMessage>,
+export async function executeAction<R, TMessage extends { type: string }>(
+  action: ActionDefinition<R, TMessage>,
   message: unknown,
-  services: TServices,
+  runtime: ManagedRuntime.ManagedRuntime<R, never>,
   traces: TraceStore,
   trace: TraceSnapshot,
 ): Promise<ActionExecution> {
   const invalidated: ResourceKey[] = [];
-  const context: ActionContext<TServices> = {
-    services,
+  const context: ActionContext = {
     trace,
     traces,
     invalidate: (key) => {
@@ -89,7 +83,7 @@ export async function executeAction<TServices, TMessage extends { type: string }
     return { ok: false, error, invalidated };
   }
 
-  const result = await Effect.runPromise(Effect.either(action.run(message, context)));
+  const result = await runtime.runPromise(Effect.either(action.run(message, context)));
 
   if (result._tag === "Left") {
     const message = result.left.message;

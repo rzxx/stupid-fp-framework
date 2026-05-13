@@ -1,5 +1,6 @@
+import type { Effect } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
-import type { ResourceGraph } from "./resource";
+import type { ResourceFailure, ResourceGraph } from "./resource";
 import type { Session } from "./session";
 import type { TraceReader } from "./trace";
 
@@ -13,19 +14,26 @@ export type ProjectionRegionSnapshot = {
   }[];
 };
 
-export type ProjectionContext<TServices> = {
-  services: TServices;
-  resources: ResourceGraph<TServices>;
-  traces: TraceReader;
-  region: <TValue>(id: string, read: () => Promise<TValue> | TValue) => Promise<TValue>;
+export type ProjectionFailure = {
+  type: "projection-error";
+  message: string;
 };
 
-export type ScreenDefinition<TServices, TSessionState, TProjection> = {
+export type ProjectionContext<R> = {
+  resources: ResourceGraph<R>;
+  traces: TraceReader;
+  region: <TValue, E>(
+    id: string,
+    read: () => Effect.Effect<TValue, E, R>,
+  ) => Effect.Effect<TValue, E, R>;
+};
+
+export type ScreenDefinition<R, TSessionState, TProjection> = {
   route: string;
   project: (
     session: Session<TSessionState>,
-    context: ProjectionContext<TServices>,
-  ) => Promise<TProjection> | TProjection;
+    context: ProjectionContext<R>,
+  ) => Effect.Effect<TProjection, ProjectionFailure | ResourceFailure, R>;
 };
 
 export type ProjectionEnvelopeData<TProjection> = {

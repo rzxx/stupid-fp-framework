@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { Effect } from "./effect";
 import type { JsonValue } from "./json";
 import type { ProjectionRegionSnapshot } from "./projection";
 
@@ -9,13 +10,20 @@ export type ResourceKey<TValue = unknown> = {
   readonly __value?: TValue;
 };
 
-export type ResourceLoader<TServices, TValue> = {
-  load(services: TServices, key: ResourceKey<TValue>): Promise<TValue> | TValue;
+export type ResourceFailure = {
+  type: "resource-error";
+  resourceType: string;
+  resourceId?: string;
+  message: string;
+};
+
+export type ResourceLoader<R, TValue> = {
+  load(key: ResourceKey<TValue>): Effect.Effect<TValue, ResourceFailure, R>;
 }["load"];
 
-export type ResourceDefinition<TServices, TValue> = {
+export type ResourceDefinition<R, TValue> = {
   readonly type: string;
-  readonly load: ResourceLoader<TServices, TValue>;
+  readonly load: ResourceLoader<R, TValue>;
 };
 
 export type ResourceSnapshot<TValue = unknown> = {
@@ -55,41 +63,65 @@ export function resourceKeyId(key: ResourceKey): string {
   return `${key.type}:${key.id}`;
 }
 
-export function defineResource<TServices, TValue>(
+export function resourceFailure(
+  resourceType: string,
+  message: string,
+  resourceId?: string,
+): ResourceFailure {
+  return { type: "resource-error", resourceType, resourceId, message };
+}
+
+export function defineResource<R, TValue>(
   type: string,
-  load: ResourceLoader<TServices, TValue>,
-): ResourceDefinition<TServices, TValue> {
+  load: ResourceLoader<R, TValue>,
+): ResourceDefinition<R, TValue> {
   return { type, load };
 }
 
-export class ResourceGraph<TServices> {
-  readonly #definitions = new Map<string, ResourceDefinition<TServices, unknown>>();
+export class ResourceGraph<R> {
+  readonly #definitions = new Map<string, ResourceDefinition<R, unknown>>();
   readonly #cache = new Map<string, ResourceSnapshot>();
   readonly #observerStorage = new AsyncLocalStorage<ResourceObservationScope>();
 
-  register<TValue>(definition: ResourceDefinition<TServices, TValue>): void {
-    this.#definitions.set(definition.type, definition as ResourceDefinition<TServices, unknown>);
+  register<TValue>(definition: ResourceDefinition<R, TValue>): void {
+    this.#definitions.set(definition.type, definition as ResourceDefinition<R, unknown>);
   }
 
-  async read<TValue>(services: TServices, key: ResourceKey<TValue>): Promise<TValue> {
+  read<TValue>(key: ResourceKey<TValue>): Effect.Effect<TValue, ResourceFailure, R> {
     this.#recordObservation(key);
 
     const id = resourceKeyId(key);
     const cached = this.#cache.get(id);
 
     if (cached) {
-      return cached.value as TValue;
+      return Effect.succeed(cached.value as TValue);
     }
 
     const definition = this.#definitions.get(key.type);
 
     if (!definition) {
-      throw new Error(`No resource registered for ${key.type}`);
+      return Effect.fail(
+        resourceFailure(key.type, `No resource registered for ${key.type}`, key.id),
+      );
     }
 
-    const value = (await definition.load(services, key)) as TValue;
-    this.#cache.set(id, { key, value });
-    return value;
+    return Effect.flatMap(
+      Effect.try({
+        try: () => definition.load(key) as Effect.Effect<TValue, ResourceFailure, R>,
+        catch: (error) =>
+          resourceFailure(
+            key.type,
+            error instanceof Error ? error.message : "Resource loader failed",
+            key.id,
+          ),
+      }),
+      (effect) =>
+        Effect.tap(effect, (value) =>
+          Effect.sync(() => {
+            this.#cache.set(id, { key, value });
+          }),
+        ),
+    );
   }
 
   invalidate(keys: readonly ResourceKey[]): void {
@@ -123,7 +155,10 @@ export class ResourceGraph<TServices> {
     });
   }
 
-  async region<TValue>(id: string, read: () => Promise<TValue> | TValue): Promise<TValue> {
+  region<TValue, E>(
+    id: string,
+    read: () => Effect.Effect<TValue, E, R>,
+  ): Effect.Effect<TValue, E, R> {
     const observer = this.#observerStorage.getStore();
 
     if (!observer) {
@@ -133,18 +168,20 @@ export class ResourceGraph<TServices> {
     const previous = observer.regionId;
     observer.regionId = id;
 
-    try {
-      const value = await read();
-      const region = this.#ensureRegion(observer, id);
+    return Effect.ensuring(
+      Effect.tap(read(), (value) =>
+        Effect.sync(() => {
+          const region = this.#ensureRegion(observer, id);
 
-      if (isJsonValue(value)) {
-        region.value = value;
-      }
-
-      return value;
-    } finally {
-      observer.regionId = previous;
-    }
+          if (isJsonValue(value)) {
+            region.value = value;
+          }
+        }),
+      ),
+      Effect.sync(() => {
+        observer.regionId = previous;
+      }),
+    );
   }
 
   #recordObservation(key: ResourceKey): void {

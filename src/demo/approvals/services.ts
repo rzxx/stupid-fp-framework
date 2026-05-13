@@ -1,29 +1,51 @@
+import { Context, Layer } from "../../framework";
 import type { ApprovalData } from "./data";
 import { createSeedData } from "./data";
 import type { AuditEntry, Deployment, Team, User } from "./types";
 
+export type AuthService = {
+  currentUser: () => User;
+  setCurrentUser: (userId: string) => void;
+};
+
+export type TeamService = {
+  find: (teamId: string) => Team;
+};
+
+export type DeploymentService = {
+  find: (deploymentId: string) => Deployment | undefined;
+  pendingForTeam: (teamId: string) => Deployment[];
+  approve: (deploymentId: string, userId: string, approvedAt: string) => Deployment;
+};
+
+export type AuditService = {
+  forDeployment: (deploymentId: string) => AuditEntry[];
+  write: (entry: Omit<AuditEntry, "id" | "at">) => AuditEntry;
+};
+
+export type ClockService = {
+  now: () => string;
+};
+
 export type ApprovalServices = {
-  auth: {
-    currentUser: () => User;
-    setCurrentUser: (userId: string) => void;
-  };
-  teams: {
-    find: (teamId: string) => Team;
-  };
-  deployments: {
-    find: (deploymentId: string) => Deployment | undefined;
-    pendingForTeam: (teamId: string) => Deployment[];
-    approve: (deploymentId: string, userId: string, approvedAt: string) => Deployment;
-  };
-  audit: {
-    forDeployment: (deploymentId: string) => AuditEntry[];
-    write: (entry: Omit<AuditEntry, "id" | "at">) => AuditEntry;
-  };
-  clock: {
-    now: () => string;
-  };
+  auth: AuthService;
+  teams: TeamService;
+  deployments: DeploymentService;
+  audit: AuditService;
+  clock: ClockService;
   data: ApprovalData;
 };
+
+export class Auth extends Context.Tag("approvals/Auth")<Auth, AuthService>() {}
+export class Teams extends Context.Tag("approvals/Teams")<Teams, TeamService>() {}
+export class Deployments extends Context.Tag("approvals/Deployments")<
+  Deployments,
+  DeploymentService
+>() {}
+export class Audit extends Context.Tag("approvals/Audit")<Audit, AuditService>() {}
+export class Clock extends Context.Tag("approvals/Clock")<Clock, ClockService>() {}
+
+export type ApprovalEnvironment = Auth | Teams | Deployments | Audit | Clock;
 
 export function createApprovalServices(options?: {
   currentUserId?: string;
@@ -104,4 +126,14 @@ export function createApprovalServices(options?: {
       },
     },
   };
+}
+
+export function createApprovalLayer(services: ApprovalServices): Layer.Layer<ApprovalEnvironment> {
+  return Layer.mergeAll(
+    Layer.succeed(Auth, services.auth),
+    Layer.succeed(Teams, services.teams),
+    Layer.succeed(Deployments, services.deployments),
+    Layer.succeed(Audit, services.audit),
+    Layer.succeed(Clock, services.clock),
+  );
 }

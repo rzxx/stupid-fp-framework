@@ -1,10 +1,11 @@
 import {
   defineResource,
+  Effect,
   resourceKey,
   type ResourceDefinition,
   type ResourceKey,
 } from "../../framework";
-import type { ApprovalServices } from "./services";
+import { Audit, Deployments, type ApprovalEnvironment } from "./services";
 import type { AuditEntry, Deployment } from "./types";
 
 export function PendingDeployments(teamId: string): ResourceKey<Deployment[]> {
@@ -19,10 +20,23 @@ export function AuditTrail(deploymentId: string): ResourceKey<AuditEntry[]> {
   return resourceKey("AuditTrail", deploymentId, `AuditTrail(${deploymentId})`);
 }
 
-export const approvalResources: ResourceDefinition<ApprovalServices, unknown>[] = [
-  defineResource("PendingDeployments", (services, key) =>
-    services.deployments.pendingForTeam(key.id),
+export const approvalResources: ResourceDefinition<ApprovalEnvironment, unknown>[] = [
+  defineResource("PendingDeployments", (key) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.pendingForTeam(key.id);
+    }),
   ),
-  defineResource("Deployment", (services, key) => services.deployments.find(key.id)),
-  defineResource("AuditTrail", (services, key) => services.audit.forDeployment(key.id)),
+  defineResource("Deployment", (key) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.find(key.id);
+    }),
+  ),
+  defineResource("AuditTrail", (key) =>
+    Effect.gen(function* () {
+      const audit = yield* Audit;
+      return audit.forDeployment(key.id);
+    }),
+  ),
 ];

@@ -2,7 +2,12 @@ import { createRuntime, defineProgram, type RuntimeStore } from "../../framework
 import { approvalActions } from "./actions";
 import { approvalResources } from "./resources";
 import { approvalScreen } from "./screen";
-import { createApprovalServices, type ApprovalServices } from "./services";
+import {
+  createApprovalLayer,
+  createApprovalServices,
+  type ApprovalEnvironment,
+  type ApprovalServices,
+} from "./services";
 import { approvalSession } from "./session";
 import type {
   ApprovalActionMessage,
@@ -19,13 +24,13 @@ export function createApprovalProgram(options?: {
     options?.services ?? createApprovalServices({ currentUserId: options?.currentUserId });
 
   return defineProgram<
-    ApprovalServices,
+    ApprovalEnvironment,
     ApprovalSessionState,
     ApprovalSessionMessage,
     ApprovalActionMessage,
     ApprovalProjection
   >({
-    services,
+    layer: createApprovalLayer(services),
     resources: approvalResources,
     session: approvalSession,
     screen: approvalScreen,

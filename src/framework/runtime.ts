@@ -43,13 +43,13 @@ export type RuntimeOptions<TSessionState, TProjection> = {
 };
 
 export function createRuntime<
-  TServices,
+  R,
   TSessionState,
   TSessionMessage extends { type: string },
   TActionMessage extends { type: string },
   TProjection,
 >(
-  program: Program<TServices, TSessionState, TSessionMessage, TActionMessage, TProjection>,
+  program: Program<R, TSessionState, TSessionMessage, TActionMessage, TProjection>,
   options?: RuntimeOptions<TSessionState, TProjection>,
 ): Runtime<TSessionMessage, TActionMessage, TProjection> {
   const sessions = new SessionStore(program.session);
@@ -123,12 +123,13 @@ export function createRuntime<
 
     try {
       observed = await program.resourceGraph.observe(() =>
-        screen.project(session, {
-          services: program.services,
-          resources: program.resourceGraph,
-          traces: traces.scoped(sessionId),
-          region: (id, read) => program.resourceGraph.region(id, read),
-        }),
+        program.runtime.runPromise(
+          screen.project(session, {
+            resources: program.resourceGraph,
+            traces: traces.scoped(sessionId),
+            region: (id, read) => program.resourceGraph.region(id, read),
+          }),
+        ),
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Projection failed";
@@ -284,7 +285,7 @@ export function createRuntime<
       const result = await executeAction(
         action,
         envelope.message as TActionMessage,
-        program.services,
+        program.runtime,
         traces,
         trace,
       );

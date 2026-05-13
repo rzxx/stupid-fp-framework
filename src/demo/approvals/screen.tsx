@@ -1,6 +1,6 @@
-import type { ScreenDefinition } from "../../framework";
+import { Effect, type ProjectionContext, type ScreenDefinition } from "../../framework";
 import { AuditTrail, Deployment, PendingDeployments } from "./resources";
-import type { ApprovalServices } from "./services";
+import { Auth, Teams, type ApprovalEnvironment } from "./services";
 import type {
   ApprovalProjection,
   ApprovalSessionState,
@@ -11,58 +11,65 @@ import type {
 } from "./types";
 
 export const approvalScreen: ScreenDefinition<
-  ApprovalServices,
+  ApprovalEnvironment,
   ApprovalSessionState,
   ApprovalProjection
 > = {
   route: "/teams/:teamId/deployments",
-  async project(session, context) {
-    const teamId = session.params.teamId;
-    const team = context.services.teams.find(teamId);
-    const currentUser = context.services.auth.currentUser();
-    const pendingDeployments = await context.region("pendingDeployments", async () =>
-      (await context.resources.read(context.services, PendingDeployments(teamId))).map(summary),
-    );
-    const selectedDeployment = session.state.selectedDeploymentId
-      ? await context.region("selectedDeployment", () =>
-          selectedDetail(session.state.selectedDeploymentId as string, context),
-        )
-      : null;
+  project(session, context) {
+    return Effect.gen(function* () {
+      const teamId = session.params.teamId;
+      const teams = yield* Teams;
+      const auth = yield* Auth;
+      const team = teams.find(teamId);
+      const currentUser = auth.currentUser();
+      const pendingDeployments = yield* context.region("pendingDeployments", () =>
+        Effect.map(context.resources.read(PendingDeployments(teamId)), (deployments) =>
+          deployments.map(summary),
+        ),
+      );
+      const selectedDeployment = session.state.selectedDeploymentId
+        ? yield* context.region("selectedDeployment", () =>
+            selectedDetail(session.state.selectedDeploymentId as string, context),
+          )
+        : null;
 
-    const tracePanel = await context.region("tracePanel", () => ({
-      open: session.state.tracePanelOpen,
-      traces: context.traces.list(),
-    }));
+      const tracePanel = yield* context.region("tracePanel", () =>
+        Effect.succeed({
+          open: session.state.tracePanelOpen,
+          traces: context.traces.list(),
+        }),
+      );
 
-    return {
-      route: "/teams/:teamId/deployments",
-      team,
-      currentUser: {
-        id: currentUser.id,
-        name: currentUser.name,
-        role: currentUser.role,
-      },
-      pendingDeployments,
-      selectedDeployment,
-      tracePanelOpen: tracePanel.open,
-      traces: tracePanel.traces,
-    };
+      return {
+        route: "/teams/:teamId/deployments",
+        team,
+        currentUser: {
+          id: currentUser.id,
+          name: currentUser.name,
+          role: currentUser.role,
+        },
+        pendingDeployments,
+        selectedDeployment,
+        tracePanelOpen: tracePanel.open,
+        traces: tracePanel.traces,
+      };
+    });
   },
 };
 
-async function selectedDetail(
-  deploymentId: string,
-  context: Parameters<typeof approvalScreen.project>[1],
-): Promise<DeploymentDetail | null> {
-  const deployment = await context.resources.read(context.services, Deployment(deploymentId));
+function selectedDetail(deploymentId: string, context: ProjectionContext<ApprovalEnvironment>) {
+  return Effect.gen(function* () {
+    const deployment = yield* context.resources.read(Deployment(deploymentId));
 
-  if (!deployment) {
-    return null;
-  }
+    if (!deployment) {
+      return null;
+    }
 
-  const auditTrail = await context.resources.read(context.services, AuditTrail(deploymentId));
+    const auditTrail = yield* context.resources.read(AuditTrail(deploymentId));
 
-  return detail(deployment, auditTrail);
+    return detail(deployment, auditTrail);
+  });
 }
 
 function summary(deployment: DeploymentRecord): DeploymentSummary {

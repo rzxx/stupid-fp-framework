@@ -7,8 +7,10 @@ import {
   defineAction,
   defineProgram,
   defineResource,
+  Context,
   Effect,
   JsonFileRuntimeStore,
+  Layer,
   MemoryRuntimeStore,
   parseClientEnvelope,
   ResourceGraph,
@@ -28,6 +30,13 @@ type Services = {
     writes: string[];
   };
 };
+
+class CounterService extends Context.Tag("test/CounterService")<
+  CounterService,
+  Services["counter"]
+>() {}
+
+type TestEnvironment = CounterService;
 
 type SessionState = {
   selected: boolean;
@@ -122,23 +131,42 @@ describe("framework contract", () => {
   });
 
   test("concurrent resource observation keeps regions isolated per projection", async () => {
-    const graph = new ResourceGraph<Services>();
+    const graph = new ResourceGraph<TestEnvironment>();
     graph.register(
-      defineResource<Services, number>("Counter", async (services, key) => {
-        if (key.id === "slow") {
-          await delay(10);
-        }
+      defineResource<TestEnvironment, number>("Counter", (key) =>
+        Effect.gen(function* () {
+          const counter = yield* CounterService;
 
-        return services.counter.value;
-      }),
+          if (key.id === "slow") {
+            yield* Effect.promise(() => delay(10));
+          }
+
+          return counter.value;
+        }),
+      ),
     );
     const services = createServices();
+    const layer = createServicesLayer(services);
     const slowKey = resourceKey<number>("Counter", "slow");
     const fastKey = resourceKey<number>("Counter", "fast");
 
     const [slow, fast] = await Promise.all([
-      graph.observe(() => graph.region("slow-region", () => graph.read(services, slowKey))),
-      graph.observe(() => graph.region("fast-region", () => graph.read(services, fastKey))),
+      graph.observe(() =>
+        Effect.runPromise(
+          Effect.provide(
+            graph.region("slow-region", () => graph.read(slowKey)),
+            layer,
+          ),
+        ),
+      ),
+      graph.observe(() =>
+        Effect.runPromise(
+          Effect.provide(
+            graph.region("fast-region", () => graph.read(fastKey)),
+            layer,
+          ),
+        ),
+      ),
     ]);
 
     expect(slow.regions).toEqual([
@@ -620,13 +648,27 @@ function createServices(): Services {
   };
 }
 
+function createServicesLayer(services: Services): Layer.Layer<TestEnvironment> {
+  return Layer.succeed(CounterService, services.counter);
+}
+
 function createCounterRuntime(
   services = createServices(),
   store?: RuntimeStore<SessionState, Projection>,
 ) {
-  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
-    services,
-    resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
+  const program = defineProgram<
+    TestEnvironment,
+    SessionState,
+    SessionMessage,
+    ActionMessage,
+    Projection
+  >({
+    layer: createServicesLayer(services),
+    resources: [
+      defineResource<TestEnvironment, number>("Counter", () =>
+        Effect.map(CounterService, (counter) => counter.value),
+      ),
+    ],
     session: {
       init: () => ({ selected: false }),
       accepts: (message): message is SessionMessage =>
@@ -641,23 +683,26 @@ function createCounterRuntime(
     },
     screen: {
       route: "/contract",
-      project: async (session, context) => ({
-        route: session.route,
-        params: session.params,
-        selected: await context.region("selected", () => session.state.selected),
-        count: await context.region("counter", () =>
-          context.resources.read(context.services, counterKey),
-        ),
-        traceIds: await context.region("traceIds", () =>
-          context.traces.list().map((trace) => trace.traceId),
-        ),
-      }),
+      project: (session, context) =>
+        Effect.gen(function* () {
+          return {
+            route: session.route,
+            params: session.params,
+            selected: yield* context.region("selected", () =>
+              Effect.succeed(session.state.selected),
+            ),
+            count: yield* context.region("counter", () => context.resources.read(counterKey)),
+            traceIds: yield* context.region("traceIds", () =>
+              Effect.succeed(context.traces.list().map((trace) => trace.traceId)),
+            ),
+          };
+        }),
     },
     actions: [
       defineAction<
-        Services,
         Extract<ActionMessage, { type: "action.increment" }>,
-        { count: number }
+        { count: number },
+        TestEnvironment
       >(
         "action.increment",
         (message): message is Extract<ActionMessage, { type: "action.increment" }> =>
@@ -666,14 +711,15 @@ function createCounterRuntime(
           "amount" in message &&
           typeof message.amount === "number",
         (message, context) =>
-          Effect.sync(() => {
-            context.services.counter.value += message.amount;
-            context.services.counter.writes.push(`increment:${message.amount}`);
+          Effect.gen(function* () {
+            const counter = yield* CounterService;
+            counter.value += message.amount;
+            counter.writes.push(`increment:${message.amount}`);
             context.invalidate(counterKey);
-            return { count: context.services.counter.value };
+            return { count: counter.value };
           }),
       ),
-      defineAction<Services, Extract<ActionMessage, { type: "action.fail" }>>(
+      defineAction<Extract<ActionMessage, { type: "action.fail" }>>(
         "action.fail",
         (message): message is Extract<ActionMessage, { type: "action.fail" }> =>
           isMessage(message) && message.type === "action.fail",
@@ -689,9 +735,19 @@ function createUnpatchableRegionRuntime(
   services = createServices(),
   store?: RuntimeStore<SessionState, Projection>,
 ) {
-  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
-    services,
-    resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
+  const program = defineProgram<
+    TestEnvironment,
+    SessionState,
+    SessionMessage,
+    ActionMessage,
+    Projection
+  >({
+    layer: createServicesLayer(services),
+    resources: [
+      defineResource<TestEnvironment, number>("Counter", () =>
+        Effect.map(CounterService, (counter) => counter.value),
+      ),
+    ],
     session: {
       init: () => ({ selected: false }),
       accepts: (message): message is SessionMessage =>
@@ -700,26 +756,29 @@ function createUnpatchableRegionRuntime(
     },
     screen: {
       route: "/contract",
-      project: async (session, context) => {
-        const counter = await context.region("counter", async () => ({
-          count: await context.resources.read(context.services, counterKey),
-          unpatchable: () => undefined,
-        }));
+      project: (session, context) =>
+        Effect.gen(function* () {
+          const counter = yield* context.region("counter", () =>
+            Effect.map(context.resources.read(counterKey), (count) => ({
+              count,
+              unpatchable: () => undefined,
+            })),
+          );
 
-        return {
-          route: session.route,
-          params: session.params,
-          selected: session.state.selected,
-          count: counter.count,
-          traceIds: [],
-        };
-      },
+          return {
+            route: session.route,
+            params: session.params,
+            selected: session.state.selected,
+            count: counter.count,
+            traceIds: [],
+          };
+        }),
     },
     actions: [
       defineAction<
-        Services,
         Extract<ActionMessage, { type: "action.increment" }>,
-        { count: number }
+        { count: number },
+        TestEnvironment
       >(
         "action.increment",
         (message): message is Extract<ActionMessage, { type: "action.increment" }> =>
@@ -728,10 +787,11 @@ function createUnpatchableRegionRuntime(
           "amount" in message &&
           typeof message.amount === "number",
         (message, context) =>
-          Effect.sync(() => {
-            context.services.counter.value += message.amount;
+          Effect.gen(function* () {
+            const counter = yield* CounterService;
+            counter.value += message.amount;
             context.invalidate(counterKey);
-            return { count: context.services.counter.value };
+            return { count: counter.value };
           }),
       ),
     ],
@@ -741,8 +801,14 @@ function createUnpatchableRegionRuntime(
 }
 
 function createFailingProjectionRuntime() {
-  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
-    services: createServices(),
+  const program = defineProgram<
+    TestEnvironment,
+    SessionState,
+    SessionMessage,
+    ActionMessage,
+    Projection
+  >({
+    layer: createServicesLayer(createServices()),
     resources: [],
     session: {
       init: () => ({ selected: false }),
@@ -752,9 +818,7 @@ function createFailingProjectionRuntime() {
     },
     screen: {
       route: "/contract",
-      project: () => {
-        throw new Error("projection exploded");
-      },
+      project: () => Effect.die(new Error("projection exploded")),
     },
     actions: [],
   });
@@ -763,9 +827,19 @@ function createFailingProjectionRuntime() {
 }
 
 function createMultiScreenRuntime() {
-  const program = defineProgram<Services, SessionState, SessionMessage, ActionMessage, Projection>({
-    services: createServices(),
-    resources: [defineResource<Services, number>("Counter", (services) => services.counter.value)],
+  const program = defineProgram<
+    TestEnvironment,
+    SessionState,
+    SessionMessage,
+    ActionMessage,
+    Projection
+  >({
+    layer: createServicesLayer(createServices()),
+    resources: [
+      defineResource<TestEnvironment, number>("Counter", () =>
+        Effect.map(CounterService, (counter) => counter.value),
+      ),
+    ],
     session: {
       init: () => ({ selected: false }),
       accepts: (message): message is SessionMessage =>
@@ -775,23 +849,25 @@ function createMultiScreenRuntime() {
     screens: [
       {
         route: "/first",
-        project: async (session, context) => ({
-          route: session.route,
-          params: session.params,
-          selected: session.state.selected,
-          count: await context.resources.read(context.services, counterKey),
-          traceIds: [],
-        }),
+        project: (session, context) =>
+          Effect.map(context.resources.read(counterKey), (count) => ({
+            route: session.route,
+            params: session.params,
+            selected: session.state.selected,
+            count,
+            traceIds: [],
+          })),
       },
       {
         route: "/second",
-        project: async (session, context) => ({
-          route: session.route,
-          params: session.params,
-          selected: session.state.selected,
-          count: await context.resources.read(context.services, counterKey),
-          traceIds: [],
-        }),
+        project: (session, context) =>
+          Effect.map(context.resources.read(counterKey), (count) => ({
+            route: session.route,
+            params: session.params,
+            selected: session.state.selected,
+            count,
+            traceIds: [],
+          })),
       },
     ],
     actions: [],

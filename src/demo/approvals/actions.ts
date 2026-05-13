@@ -1,10 +1,10 @@
 import { actionFailure, defineAction, Effect, type ActionDefinition } from "../../framework";
 import { AuditTrail, Deployment, PendingDeployments } from "./resources";
-import type { ApprovalServices } from "./services";
+import { Audit, Auth, Clock, Deployments, type ApprovalEnvironment } from "./services";
 import type { ApprovalActionMessage } from "./types";
 
 export const approveDeploymentAction: ActionDefinition<
-  ApprovalServices,
+  ApprovalEnvironment,
   ApprovalActionMessage,
   { deploymentId: string; status: "approved" }
 > = defineAction(
@@ -20,15 +20,18 @@ export const approveDeploymentAction: ActionDefinition<
         deploymentId: message.deploymentId,
       });
 
-      const user = yield* Effect.sync(() => context.services.auth.currentUser());
+      const auth = yield* Auth;
+      const deployments = yield* Deployments;
+      const audit = yield* Audit;
+      const clock = yield* Clock;
+
+      const user = yield* Effect.sync(() => auth.currentUser());
       context.traces.add(context.trace, "auth", "current user loaded", {
         userId: user.id,
         role: user.role,
       });
 
-      const deployment = yield* Effect.sync(() =>
-        context.services.deployments.find(message.deploymentId),
-      );
+      const deployment = yield* Effect.sync(() => deployments.find(message.deploymentId));
 
       if (!deployment) {
         return yield* Effect.fail(
@@ -75,17 +78,15 @@ export const approveDeploymentAction: ActionDefinition<
         deploymentId: deployment.id,
       });
 
-      const approvedAt = context.services.clock.now();
-      yield* Effect.sync(() =>
-        context.services.deployments.approve(deployment.id, user.id, approvedAt),
-      );
+      const approvedAt = clock.now();
+      yield* Effect.sync(() => deployments.approve(deployment.id, user.id, approvedAt));
       context.traces.add(context.trace, "write", "deployment approved", {
         deploymentId: deployment.id,
         approvedBy: user.id,
       });
 
       yield* Effect.sync(() =>
-        context.services.audit.write({
+        audit.write({
           actorId: user.id,
           event: "deployment.approved",
           deploymentId: deployment.id,
