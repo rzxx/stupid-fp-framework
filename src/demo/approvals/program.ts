@@ -12,8 +12,8 @@ import { approvalSession } from "./session";
 import type {
   ApprovalActionMessage,
   ApprovalProjection,
-  ApprovalSessionMessage,
-  ApprovalSessionState,
+  ApprovalUIEvent,
+  ApprovalUIState,
 } from "./types";
 
 export function createApprovalProgram(options?: {
@@ -25,14 +25,14 @@ export function createApprovalProgram(options?: {
 
   return defineProgram<
     ApprovalEnvironment,
-    ApprovalSessionState,
-    ApprovalSessionMessage,
+    ApprovalUIState,
+    ApprovalUIEvent,
     ApprovalActionMessage,
     ApprovalProjection
   >({
     layer: createApprovalLayer(services),
     resources: approvalResources,
-    session: approvalSession,
+    uiState: approvalSession,
     screen: approvalScreen,
     actions: approvalActions,
   });
@@ -41,7 +41,7 @@ export function createApprovalProgram(options?: {
 export function createApprovalRuntime(options?: {
   services?: ApprovalServices;
   currentUserId?: string;
-  store?: RuntimeStore<ApprovalSessionState, ApprovalProjection>;
+  store?: RuntimeStore<ApprovalUIState, ApprovalProjection>;
 }) {
   return createRuntime(createApprovalProgram(options), { store: options?.store });
 }

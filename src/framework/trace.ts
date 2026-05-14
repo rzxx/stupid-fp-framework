@@ -2,6 +2,7 @@ import type { JsonRecord } from "./json";
 
 export type TracePhase =
   | "message"
+  | "ui"
   | "session"
   | "action"
   | "validation"

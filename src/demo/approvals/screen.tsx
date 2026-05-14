@@ -9,7 +9,7 @@ import { AuditTrail, Deployment, PendingDeployments } from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
 import type {
   ApprovalProjection,
-  ApprovalSessionState,
+  ApprovalUIState,
   AuditEntry,
   Deployment as DeploymentRecord,
   DeploymentDetail,
@@ -18,7 +18,7 @@ import type {
 
 export const approvalScreen: ScreenDefinition<
   ApprovalEnvironment,
-  ApprovalSessionState,
+  ApprovalUIState,
   ApprovalProjection
 > = {
   route: Route.define("/teams/:teamId/deployments", {

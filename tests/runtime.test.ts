@@ -35,12 +35,21 @@ describe("prototype runtime", () => {
     const result = await runtime.receive({
       type: "message",
       sessionId: connected.sessionId,
-      message: { type: "session.selectDeployment", deploymentId },
+      message: { type: "ui.deployment.select", deploymentId },
     });
     const patch = latestPatch(result.envelopes);
+    const trace = result.envelopes.find((envelope) => envelope.type === "trace:update");
     const selected = patch.patch.regions.find((region) => region.id === "selectedDeployment");
 
     expect(selected?.value).toMatchObject({ id: deploymentId });
+    expect(trace?.trace.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "ui",
+          label: "ui.deployment.select applied",
+        }),
+      ]),
+    );
     const pendingDeployments = patch.patch.regions.find(
       (region) => region.id === "pendingDeployments",
     );
@@ -88,7 +97,7 @@ describe("prototype runtime", () => {
     const result = await runtime.receive({
       type: "message",
       sessionId: "missing",
-      message: { type: "session.toggleTracePanel" },
+      message: { type: "ui.trace.toggle" },
     });
 
     expect(result.envelopes).toEqual([

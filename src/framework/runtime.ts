@@ -290,7 +290,7 @@ export function createRuntime<
 
         sessions.update(session, envelope.message as TSessionMessage);
         await runSessionUpdateHooks(session, envelope.message as TSessionMessage);
-        traces.add(trace, "session", `${envelope.message.type} applied`);
+        traces.add(trace, program.uiState ? "ui" : "session", `${envelope.message.type} applied`);
         const projected = await patchSession(session.sessionId, trace);
         if (trace.status !== "error") {
           traces.complete(trace);

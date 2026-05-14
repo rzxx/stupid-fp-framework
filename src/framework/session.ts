@@ -1,5 +1,6 @@
 import type { ProjectionRegionSnapshot } from "./projection";
 import { acceptsSchema, type FrameworkSchema } from "./schema";
+import type { UIStateDefinition } from "./ui-state";
 
 export const SESSION_SNAPSHOT_VERSION = 1;
 
@@ -18,6 +19,10 @@ export type SessionDefinition<TState, TMessage> = {
   accepts: (message: unknown) => message is TMessage;
   update: (state: TState, message: TMessage) => TState;
 };
+
+export type SessionRuntimeDefinition<TState, TMessage> =
+  | SessionDefinition<TState, TMessage>
+  | UIStateDefinition<TState, TMessage>;
 
 export type SessionMessageDefinition<TState, TMessage extends { type: string }> = {
   type: TMessage["type"];

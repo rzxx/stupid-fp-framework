@@ -90,7 +90,7 @@ export function ApprovalApp(props: {
             selectedId={selectedId}
             onSelect={(deploymentId) =>
               stream.send({
-                type: "session.selectDeployment",
+                type: "ui.deployment.select",
                 deploymentId,
               })
             }
@@ -108,7 +108,7 @@ export function ApprovalApp(props: {
           <TracePanel
             projection={projection}
             traces={stream.traces.visible}
-            onToggle={() => stream.send({ type: "session.toggleTracePanel" })}
+            onToggle={() => stream.send({ type: "ui.trace.toggle" })}
           />
         </section>
       ) : (

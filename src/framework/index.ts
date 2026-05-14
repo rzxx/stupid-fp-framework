@@ -13,3 +13,4 @@ export * from "./session";
 export * from "./store";
 export * from "./stream";
 export * from "./trace";
+export * from "./ui-state";

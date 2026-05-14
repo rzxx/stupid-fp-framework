@@ -58,18 +58,21 @@ export type ApprovalProjection = {
   traces: TraceSnapshot[];
 };
 
-export type ApprovalSessionState = {
+export type ApprovalUIState = {
   selectedDeploymentId: string | null;
   tracePanelOpen: boolean;
 };
 
-export type ApprovalSessionMessage =
-  | { type: "session.selectDeployment"; deploymentId: string }
-  | { type: "session.toggleTracePanel" };
+export type ApprovalUIEvent =
+  | { type: "ui.deployment.select"; deploymentId: string }
+  | { type: "ui.trace.toggle" };
+
+export type ApprovalSessionState = ApprovalUIState;
+export type ApprovalSessionMessage = ApprovalUIEvent;
 
 export type ApprovalActionMessage = {
   type: "action.approveDeployment";
   deploymentId: string;
 };
 
-export type ApprovalClientMessage = ApprovalSessionMessage | ApprovalActionMessage;
+export type ApprovalClientMessage = ApprovalUIEvent | ApprovalActionMessage;
