@@ -250,10 +250,10 @@ function TracePanel(props: {
             ))}
           </div>
         ) : (
-          <p className="empty-state">No messages yet.</p>
+          <p className="empty-state">No trace events yet.</p>
         )
       ) : (
-        <p className="empty-state">Trace panel is view state on the server.</p>
+        <p className="empty-state">Trace panel is checkpointed UI state.</p>
       )}
     </section>
   );

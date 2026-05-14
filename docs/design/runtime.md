@@ -111,7 +111,7 @@ Responsibilities:
 The view is allowed to make the app feel live. It should not become an unsafe hidden database. The key design pressure is:
 
 ```txt
-If losing this state would corrupt the product, it should be a resource, not only view state.
+If losing this state would corrupt the product, it should be a resource, not only UI state.
 ```
 
 ### Stream Protocol

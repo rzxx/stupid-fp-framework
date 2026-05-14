@@ -1,6 +1,6 @@
 # Design Docs: Durable Server Programs
 
-This is the entrypoint for the second-stage design docs. The project explores webapps as durable server programs: browser events become typed program inputs, inputs enter a server program, effects update durable domain resources, UI events update view state, and projections stream back through a React-compatible adapter.
+This is the entrypoint for the second-stage design docs. The project explores webapps as durable server programs: browser events become typed program inputs, inputs enter a server program, effects update durable domain resources, UI events update UI state, and projections stream back through a React-compatible adapter.
 
 For the full design context, start with [docs/design/README.md](design/README.md).
 
@@ -13,4 +13,4 @@ For the full design context, start with [docs/design/README.md](design/README.md
 
 The first vertical-slice implementation boundary is locked in [docs/prototype-plan.md](prototype-plan.md).
 
-The current hardening stage is scoped in [docs/kernel-hardening-plan.md](kernel-hardening-plan.md).
+The current implemented pivot is recorded in [docs/stage-7-record.md](stage-7-record.md). The review that drove it is [docs/framework-state-review-4.md](framework-state-review-4.md).

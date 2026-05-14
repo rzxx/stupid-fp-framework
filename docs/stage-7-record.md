@@ -3,8 +3,8 @@
 ## Goal
 
 Implement the Review 4 pivot: make Domain/UI state explicit, stop treating session/view runtime
-carriers as a public state tier, and prove that the runtime can process inputs through fresh stateless invocations
-using store-backed checkpoints and observations.
+carriers as a public state tier, and prove that the runtime can process inputs through fresh
+stateless invocations using store-backed checkpoints and observations.
 
 ## Decisions Implemented
 
@@ -25,7 +25,7 @@ using store-backed checkpoints and observations.
 
 ## Verification
 
-- `bun test`: 47 tests pass.
+- `bun test`: 46 tests pass.
 - `bun run check`: typecheck, lint, and format check pass.
 
 ## Remaining Follow-Ups

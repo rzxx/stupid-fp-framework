@@ -28,11 +28,11 @@ No API layer. No client-side cache soup. No manual sync. Domain state lives in t
 - A **Bun-native** framework (no webpack, no vite, no node — just `bun --hot`)
 - **Effect-powered** backend — typed, composable, testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
-- **Domain + UI state** — durable workflow truth stays in resources/actions; transient view state is modeled as UI state
+- **Domain + UI state** — durable workflow truth stays in resources/actions; transient view/editing context is modeled as UI state
 - **Stateless-capable runtime** — view checkpoints and stream history can be restored from runtime stores instead of process memory
 - **Reactive by default** — actions invalidate resources, runtime pushes patches to all affected clients
 - **Typed program inputs** — actions, UI events, resource events, and system events have distinct jobs
-- **Causally traced** — every action leaves a trace; debugging is actually pleasant
+- **Causally traced** — program inputs leave traces; debugging is actually pleasant
 
 ## this is not
 
@@ -51,7 +51,7 @@ You define three things:
 2. **Actions** — things users can do (e.g., `approveDeployment`), with validation, auth, and effects
 3. **UI state + screens** — how view/editing state combines with resources into UI data, grouped into named `region`s
 
-The runtime wires them together. When an action runs, it invalidates resources. When a UI event runs, it updates view state without mutating domain truth. The runtime figures out which views are affected, recomputes their projections, and pushes UI patches over WebSocket. React just renders.
+The runtime wires them together. When an action runs, it invalidates resources. When a UI event runs, it updates UI state without mutating domain truth. The runtime figures out which views are affected, recomputes their projections, and pushes UI patches over WebSocket. React just renders.
 
 ```ts
 class Deployments extends Context.Tag("Deployments")<
@@ -132,7 +132,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
-bun test          # runs 47 contract + integration + acceptance tests
+bun test          # runs 46 contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
 ```
@@ -141,7 +141,7 @@ bun check         # typecheck + lint + format check
 
 ## project status
 
-This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 42 of them). But it's:
+This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 46 of them). But it's:
 
 - Not optimized for production
 - Runtime stores are contract-tested development adapters, not production durability adapters yet
@@ -157,12 +157,12 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 ## docs
 
 - **[Design Overview](docs/design.md)** — start here for the full picture
-- **[Model & Vocabulary](docs/design/model.md)** — core concepts: resources, actions, projections, regions
+- **[Model & Vocabulary](docs/design/model.md)** — core concepts: resources, actions, UI state, view checkpoints, projections, regions
 - **[Developer Experience](docs/design/developer-experience.md)** — what it feels like to write an app
 - **[Runtime Architecture](docs/design/runtime.md)** — how connect, receive, project, and invalidation work
 - **[Proposal](docs/proposal.md)** — the original pitch
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
-- **[Kernel Hardening Plan](docs/kernel-hardening-plan.md)** — what it would take to go from prototype to real
+- **[Stage 7 Record](docs/stage-7-record.md)** — current Domain/UI state and stateless runtime implementation record
 
 ---
 
