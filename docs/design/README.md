@@ -25,6 +25,7 @@ Live sessions matter, but they are not the whole framework. A live session is th
 - [../prototype-plan.md](../prototype-plan.md): concrete boundary for the first Bun + React deployment-approval vertical slice.
 - [../kernel-hardening-plan.md](../kernel-hardening-plan.md): current next-stage scope for framework kernel hardening.
 - [../framework-state-review-3.md](../framework-state-review-3.md): Stage 6 audit and decision record for Effect-native services, API, plugins, persistence, and adapter boundaries.
+- [../framework-state-review-4.md](../framework-state-review-4.md): Stage 7 pivot review for Domain/UI state, stateless serverless runtime, and clearer program input vocabulary.
 
 ## How To Use This Set
 
