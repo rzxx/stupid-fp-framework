@@ -249,7 +249,8 @@ export function createRuntime<
     },
 
     async receive(envelope) {
-      const session = sessions.get(envelope.sessionId);
+      const session =
+        sessions.get(envelope.sessionId) ?? (await restoreSessionForReceive(envelope.sessionId));
 
       if (!session) {
         return {
@@ -560,6 +561,20 @@ export function createRuntime<
       result: { status: "replayed", replayed: replay.length },
       replay: replay.map((entry) => entry.envelope),
     };
+  }
+
+  async function restoreSessionForReceive(
+    sessionId: string,
+  ): Promise<Session<TSessionState> | undefined> {
+    const snapshot = await runStore(() => store.loadSession(sessionId));
+
+    if (!snapshot) {
+      return undefined;
+    }
+
+    const session = sessions.restore(snapshot);
+    await runSessionHooks("restore", session);
+    return session;
   }
 
   function resolveScreen(route: string) {

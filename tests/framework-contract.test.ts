@@ -6,6 +6,7 @@ import {
   actionFailure,
   Action,
   createRuntime,
+  createStatelessRuntime,
   defineProgram,
   defineResource,
   Context,
@@ -780,6 +781,31 @@ describe("framework contract", () => {
     expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
   });
 
+  test("stateless runtime can process a UI event in a fresh invocation", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const runtime = createStatelessRuntime(() => createCounterProgram(services), { store });
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "message",
+      sessionId: connected.sessionId,
+      message: { type: "session.toggle" },
+    });
+
+    const projection = applyCounterPatch(connected.projection, latestPatch(result.envelopes));
+
+    expect(projection.selected).toBe(true);
+    expect(latestTrace(result.envelopes).trace.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "session",
+          label: "session.toggle applied",
+        }),
+      ]),
+    );
+  });
+
   test("stream parser rejects params that are not string records", () => {
     expect(
       parseClientEnvelope(
@@ -823,13 +849,14 @@ function createCounterRuntime(
   store?: RuntimeStore<SessionState, Projection>,
   plugins: FrameworkPlugin<TestEnvironment>[] = [],
 ) {
-  const program = defineProgram<
-    TestEnvironment,
-    SessionState,
-    SessionMessage,
-    ActionMessage,
-    Projection
-  >({
+  return createRuntime(createCounterProgram(services, plugins), { store });
+}
+
+function createCounterProgram(
+  services = createServices(),
+  plugins: FrameworkPlugin<TestEnvironment>[] = [],
+) {
+  return defineProgram<TestEnvironment, SessionState, SessionMessage, ActionMessage, Projection>({
     layer: createServicesLayer(services),
     plugins,
     resources: [
@@ -872,8 +899,6 @@ function createCounterRuntime(
         .run(() => Effect.fail(actionFailure("contract failure"))),
     ],
   });
-
-  return createRuntime(program, { store });
 }
 
 function createUnpatchableRegionRuntime(
