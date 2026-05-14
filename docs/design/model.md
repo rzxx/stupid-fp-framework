@@ -22,7 +22,7 @@ This framework explores a different shape:
 
 ```txt
 browser event
--> typed message
+-> typed program input
 -> server program
 -> effect transaction
 -> resource changes
@@ -30,9 +30,9 @@ browser event
 -> streamed UI patch
 ```
 
-The browser should not primarily "call APIs" inside the same app. It should send messages into a fullstack program. The program runs typed effects, updates durable resources, and streams changes to the browser.
+The browser should not primarily "call APIs" inside the same app. It should send typed inputs into a fullstack program. The program runs typed effects, updates durable resources, updates view/UI state when appropriate, and streams changes to the browser.
 
-React stays important, but as a rendering adapter and ecosystem bridge. The framework kernel should own the fullstack runtime model: messages, actions, resources, sessions, projections, streams, and traces.
+React stays important, but as a rendering adapter and ecosystem bridge. The framework kernel should own the fullstack runtime model: actions, UI events, resource events, system events, resources, view checkpoints, projections, streams, and traces.
 
 ## Intended Fit
 
@@ -55,7 +55,7 @@ This is less interesting for mostly static sites, marketing pages, simple conten
 
 ### Program
 
-A `Program` is the fullstack application unit. It receives messages, coordinates screens, sessions, resources, effects, projections, and traces.
+A `Program` is the fullstack application unit. It receives typed inputs, coordinates screens, UI state, resources, effects, projections, and traces.
 
 It is not just a route handler. It is closer to the running application model.
 
@@ -63,8 +63,8 @@ Example responsibilities:
 
 - declare screens and routes
 - provide services and effect capabilities
-- route messages to actions or session updates
-- connect sessions to resource subscriptions
+- route inputs to actions, UI events, resource events, or system handling
+- connect view checkpoints to resource observations
 - produce projections for renderer adapters
 - record causal traces
 
@@ -77,28 +77,25 @@ A screen declares what it observes and how that observed state becomes a project
 Conceptually:
 
 ```txt
-route params + session state + observed resources -> projection
+route params + UI state + observed domain resources -> projection
 ```
 
-### Message
+### Program Input
 
-A `Message` is something entering the server program.
+A `ProgramInput` is something entering the server program. `Message` is transport wording; app authors should usually think in more specific input types.
 
-Messages can come from:
+Program inputs include:
 
-- user interactions
-- form submissions
-- client component events
-- server timers
-- background jobs
-- resource subscriptions
-- reconnect/resume events
+- actions
+- UI events
+- resource events
+- system events such as connect, resume, timers, and lifecycle signals
 
-Messages are the default way the browser talks to the app. They are not raw HTTP endpoints from the developer's point of view.
+Program inputs are the default way the browser, host, or resource system talks to the app. They are not raw HTTP endpoints from the developer's point of view.
 
 ### Action
 
-An `Action` is a named server transaction triggered by a message.
+An `Action` is a named server transaction.
 
 Actions are where validation, authorization, mutation, effect execution, invalidation, and tracing meet. They should be explicit enough that the framework can answer "what changed and why?"
 
@@ -109,6 +106,35 @@ An action should be able to say:
 - what durable resources it mutates or invalidates
 - what trace events it produced
 - what optimistic or pending state may be shown
+
+### UI State And UI Event
+
+`UIState` is view/editing context. It is not a weak exception to the model; it is the second state tier.
+
+Examples:
+
+- selected row
+- open panel
+- draft mode
+- filter text
+- active timeline tab
+- trace panel visibility
+
+`UIEvent` updates UI state. It may cause projection recomputation, but it must not mutate domain truth. If losing a value only changes presentation, it belongs in UI state. If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state, it belongs in domain state.
+
+UI state is local-first by default, can be checkpointed for resume, and should be promoted to domain state when it becomes product truth.
+
+### Resource Event
+
+A `ResourceEvent` tells the program that observable domain state changed or should be refreshed.
+
+Resource events can come from:
+
+- server timers
+- background jobs
+- resource subscriptions
+- external integrations
+- manual invalidation
 
 ### Effect
 
@@ -140,26 +166,25 @@ Resources can represent:
 
 Resources replace scattered fetches as the default data model. A screen observes resources. Actions invalidate resources. The runtime owns refresh, recomputation, subscriptions, and patch delivery.
 
-### Session
+### View Context
 
-A `Session` is the per-browser-tab conversation with the program.
+A `ViewContext` is the restorable view conversation with the program.
 
-It may hold conversational state:
+It may hold runtime/view data:
 
-- selected row
-- open panel
-- draft mode
-- current workflow step
-- local pending action state
-- UI subscription preferences
+- view ID
+- route and params
+- UI checkpoint state
+- projection version and cursor
+- observed regions and resources
 
-A session is live and useful, but it is not trusted as durable truth. If it dies, the important state should be reconstructable from durable resources, snapshots, event history, or client-provided cursors.
+Live sessions are a host optimization over view contexts. They are useful, but process memory is not trusted as durable truth. If a process dies, the runtime should restore or rebuild from domain resources, view checkpoints, stream history, or client-provided cursors.
 
 ### Projection
 
 A `Projection` is what the server program wants the user to see.
 
-It can be a React tree, a framework-specific UI tree, a serialized patch, or another renderable model. The exact representation can change by adapter. The important idea is that durable resources and session state produce a user-facing projection.
+It can be a React tree, a framework-specific UI tree, a serialized patch, or another renderable model. The exact representation can change by adapter. The important idea is that domain resources and UI state produce a user-facing projection.
 
 ### Stream
 
@@ -171,7 +196,7 @@ It carries things like:
 - UI patches
 - action results
 - resource invalidations
-- session updates
+- UI state updates
 - trace events
 - reconnect cursors
 
@@ -198,7 +223,7 @@ A `Trace` is the causal record of why something happened.
 After a click, a trace should be able to show:
 
 ```txt
-message
+program input
 -> validation
 -> authorization
 -> effects

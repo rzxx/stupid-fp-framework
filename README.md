@@ -15,11 +15,11 @@ Every webapp starts simple and grows into a tangle of fetch calls, loading state
 What if instead you wrote **one program** — a server program — and the UI was just a projection of its state?
 
 ```
-browser event → typed message → server runs effect → resources update
+browser event → typed program input → server runs effect → resources update
 → runtime figures out what changed → streams UI patch → React renders it
 ```
 
-No API layer. No client-side cache. No manual sync. Just a server that _is_ the app, and a React client that renders whatever it says.
+No API layer. No client-side cache soup. No manual sync. Domain state lives in the server program; UI state is explicit view/editing context; React renders the projection.
 
 ---
 
@@ -28,9 +28,10 @@ No API layer. No client-side cache. No manual sync. Just a server that _is_ the 
 - A **Bun-native** framework (no webpack, no vite, no node — just `bun --hot`)
 - **Effect-powered** backend — typed, composable, testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
-- **Session-per-tab** — each browser gets a restorable server session with reconnect + replay
+- **Domain + UI state** — durable workflow truth stays in resources/actions; transient view state is modeled as UI state
+- **Stateless-capable runtime** — view checkpoints and stream history can be restored from runtime stores instead of process memory
 - **Reactive by default** — actions invalidate resources, runtime pushes patches to all affected clients
-- **Elm-like message discipline** — UI sends typed messages, server handles everything
+- **Typed program inputs** — actions, UI events, resource events, and system events have distinct jobs
 - **Causally traced** — every action leaves a trace; debugging is actually pleasant
 
 ## this is not
@@ -48,9 +49,9 @@ You define three things:
 
 1. **Resources** — the data your app cares about (e.g., `PendingDeployments`, `Deployment`, `AuditTrail`)
 2. **Actions** — things users can do (e.g., `approveDeployment`), with validation, auth, and effects
-3. **Screens** — how to turn resources into UI data, grouped into named `region`s
+3. **UI state + screens** — how view/editing state combines with resources into UI data, grouped into named `region`s
 
-The runtime wires them together. When an action runs, it invalidates resources. The runtime figures out which sessions are affected, recomputes their projections, and pushes UI patches over WebSocket. React just renders.
+The runtime wires them together. When an action runs, it invalidates resources. When a UI event runs, it updates view state without mutating domain truth. The runtime figures out which views are affected, recomputes their projections, and pushes UI patches over WebSocket. React just renders.
 
 ```ts
 class Deployments extends Context.Tag("Deployments")<
@@ -86,16 +87,31 @@ const approveDeployment = Action.define("action.approveDeployment")
     }),
   );
 
+// UI state — view/editing context, not durable workflow truth
+const approvalUI = UIState.define({
+  init: () => ({ selectedDeploymentId: null }),
+  events: [
+    {
+      type: "ui.deployment.select",
+      schema: Schema.Struct({
+        type: Schema.Literal("ui.deployment.select"),
+        deploymentId: Schema.String,
+      }),
+      update: (ui, event) => ({ ...ui, selectedDeploymentId: event.deploymentId }),
+    },
+  ],
+});
+
 // A screen — reads resources in named regions
 const screen = {
   route: Route.define("/teams/:teamId/deployments", {
     params: Schema.Struct({ teamId: Schema.String }),
   }),
-  project: (session, ctx) =>
+  project: (view, ctx) =>
     Effect.gen(function* () {
       return {
         pending: yield* ctx.region("pendingDeployments", () =>
-          ctx.resources.read(PendingDeployments.key(session.params.teamId)),
+          ctx.resources.read(PendingDeployments.key(view.params.teamId)),
         ),
       };
     }),
@@ -116,7 +132,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
-bun test          # runs 42 contract + integration + acceptance tests
+bun test          # runs 47 contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
 ```
@@ -129,6 +145,7 @@ This is v0.0.0. It's a working prototype that passes all of its contract, integr
 
 - Not optimized for production
 - Runtime stores are contract-tested development adapters, not production durability adapters yet
+- Stateless invocation is present but still early; Bun remains the main demo host
 - Not packaged for npm
 - Not API-stable (everything can change)
 - **Real enough to explore the idea** — run the demo, read the source, see if the paradigm clicks

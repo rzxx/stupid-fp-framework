@@ -1,6 +1,6 @@
 # Design Docs: Durable Server Programs
 
-This is the entrypoint for the second-stage design docs. The project explores webapps as durable server programs: browser events become typed messages, messages enter a server program, effects update durable resources, and UI projections stream back through a React-compatible adapter.
+This is the entrypoint for the second-stage design docs. The project explores webapps as durable server programs: browser events become typed program inputs, inputs enter a server program, effects update durable domain resources, UI events update view state, and projections stream back through a React-compatible adapter.
 
 For the full design context, start with [docs/design/README.md](design/README.md).
 

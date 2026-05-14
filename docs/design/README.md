@@ -16,6 +16,14 @@ Typed resources and actions replace fetch/cache/API glue as the default app mode
 
 Live sessions matter, but they are not the whole framework. A live session is the active conversation between one browser tab and the server program. Durable resources remain the source of truth.
 
+The current pivot is Domain + UI state. Domain state is durable workflow truth, modeled through
+resources, actions, effects, and invalidation. UI state is view/editing context: local-first where
+possible, checkpointed when a server projection or resume needs it, and promoted to domain state
+when it becomes product truth.
+
+The kernel should be able to restore a view checkpoint and process an input without depending on
+process memory. Bun is the first host adapter, not the whole runtime model.
+
 ## Files
 
 - [model.md](model.md): thesis, intended fit, and core vocabulary. This is the default context file for any agent.
@@ -26,6 +34,7 @@ Live sessions matter, but they are not the whole framework. A live session is th
 - [../kernel-hardening-plan.md](../kernel-hardening-plan.md): current next-stage scope for framework kernel hardening.
 - [../framework-state-review-3.md](../framework-state-review-3.md): Stage 6 audit and decision record for Effect-native services, API, plugins, persistence, and adapter boundaries.
 - [../framework-state-review-4.md](../framework-state-review-4.md): Stage 7 pivot review for Domain/UI state, stateless serverless runtime, and clearer program input vocabulary.
+- [../stage-7-record.md](../stage-7-record.md): implementation record for the Domain/UI and stateless invocation pivot.
 
 ## How To Use This Set
 

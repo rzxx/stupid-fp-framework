@@ -22,15 +22,15 @@ They should start with:
 What server program is running?
 What screen is the user looking at?
 What resources does that screen observe?
-What messages can enter from the browser?
-Which actions handle those messages?
+What inputs can enter from the browser, host, or resource system?
+Which actions, UI events, resource events, or system events handle those inputs?
 What effects are allowed?
 Which state is durable and which state is conversational?
 What projection should be streamed back?
 How will we explain why the UI changed?
 ```
 
-The mental shift is from "frontend calls backend" to "the app receives messages and evolves."
+The mental shift is from "frontend calls backend" to "the app receives typed inputs and evolves."
 
 ## Building A Workflow Feature
 
@@ -62,26 +62,27 @@ Examples:
 
 These are not fetch functions sprinkled into components. They are observable resources that screens can subscribe to and actions can invalidate.
 
-### 3. Define Messages And Actions
+### 3. Define Program Inputs
 
 Name the things users and systems can do.
 
 Examples:
 
-- `approveDeployment`
-- `requestChanges`
-- `claimIncident`
-- `addIncidentNote`
-- `startAgentRun`
-- `cancelAgentRun`
+- `deployment.approve` as an action
+- `deployment.select` as a UI event
+- `incident.claim` as an action
+- `trace.toggle` as a UI event
+- `agent.runProgressed` as a resource event
+- `system.resume` as a system event
 
-Actions should read like workflow transactions. They are not generic endpoint names.
+Actions should read like workflow transactions. UI events should read like view/editing changes.
+Resource and system events should read like runtime inputs, not user workflow commands.
 
-### 4. Separate Durable State From Conversational State
+### 4. Separate Domain State From UI State
 
-Durable state belongs in resources. Conversational state belongs in the session.
+Domain state belongs in resources and actions. UI state belongs in the UI tier.
 
-Examples of durable state:
+Examples of domain state:
 
 - deployment approval status
 - incident owner
@@ -89,7 +90,7 @@ Examples of durable state:
 - AI run status
 - audit entries
 
-Examples of conversational session state:
+Examples of UI state:
 
 - selected deployment row
 - open details panel
@@ -101,14 +102,14 @@ The goal is not to forbid client-side state. The goal is to stop accidental clie
 
 ### 5. Project Server State Into UI
 
-The screen observes resources, combines them with session state, and produces a projection. The React adapter renders that projection and hosts normal React components where useful.
+The screen observes resources, combines them with UI state, and produces a projection. The React adapter renders that projection and hosts normal React components where useful.
 
 ### 6. Inspect The Trace
 
 When a user clicks "Approve", the developer should be able to see the causal chain:
 
 ```txt
-approveDeployment message
+deployment.approve action
 -> input validation
 -> current user lookup
 -> permission check
@@ -169,24 +170,24 @@ const approveDeployment = Action.define("deployment.approve")
 
 This should feel closer to a workflow transaction than an API route.
 
-### Session State
+### UI State
 
 ```ts
-const ApprovalSession = Session.define({
+const ApprovalUI = UIState.define({
   init: () => ({
     selectedDeployment: null as DeploymentId | null,
     detailsPanel: "closed" as "closed" | "open",
     tracePanel: "closed" as "closed" | "open",
   }),
 
-  update: {
-    selectDeployment: (state, deploymentId: DeploymentId) => ({
+  events: {
+    "deployment.select": (state, deploymentId: DeploymentId) => ({
       ...state,
       selectedDeployment: deploymentId,
       detailsPanel: "open",
     }),
 
-    toggleTracePanel: (state) => ({
+    "trace.toggle": (state) => ({
       ...state,
       tracePanel: state.tracePanel === "open" ? "closed" : "open",
     }),
@@ -194,7 +195,7 @@ const ApprovalSession = Session.define({
 });
 ```
 
-This is conversational UI state. It is useful, but the system should not depend on it as the only copy of durable workflow truth.
+This is UI state. It is useful, can be checkpointed for resume, and must not become the only copy of durable workflow truth.
 
 ### Screen Projection
 
@@ -203,12 +204,12 @@ const ApprovalScreen = Screen.define("/teams/:teamId/deployments")
   .observe(({ teamId }) => ({
     pending: PendingDeployments(teamId),
   }))
-  .session(ApprovalSession)
-  .view(({ pending, session, send }) => (
+  .ui(ApprovalUI)
+  .view(({ pending, ui, send }) => (
     <DeploymentApprovalConsole
       deployments={pending}
-      selectedDeployment={session.selectedDeployment}
-      onSelect={(deploymentId) => send({ type: "selectDeployment", deploymentId })}
+      selectedDeployment={ui.selectedDeployment}
+      onSelect={(deploymentId) => send({ type: "ui.deployment.select", deploymentId })}
       onApprove={(deploymentId) => send(approveDeployment({ deploymentId }))}
     />
   ));
