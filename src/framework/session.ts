@@ -5,14 +5,18 @@ import type { UIStateDefinition } from "./ui-state";
 export const SESSION_SNAPSHOT_VERSION = 1;
 
 export type Session<TState> = {
+  viewId: string;
   sessionId: string;
   route: string;
   params: Record<string, string>;
+  ui: TState;
   state: TState;
   projectionVersion: number;
   cursor: string | null;
   observedRegions: ProjectionRegionSnapshot[];
 };
+
+export type ViewContext<TUIState> = Session<TUIState>;
 
 export type SessionDefinition<TState, TMessage> = {
   init: () => TState;
@@ -75,11 +79,16 @@ export class LiveSessionRegistry<TState, TMessage> {
   }
 
   create(route: string, params: Record<string, string>): Session<TState> {
+    const id = this.#nextId++;
+    const viewId = `view-${id}`;
+    const state = this.#definition.init();
     const session: Session<TState> = {
-      sessionId: `session-${this.#nextId++}`,
+      viewId,
+      sessionId: `session-${id}`,
       route,
       params,
-      state: this.#definition.init(),
+      ui: state,
+      state,
       projectionVersion: 0,
       cursor: null,
       observedRegions: [],
@@ -99,9 +108,11 @@ export class LiveSessionRegistry<TState, TMessage> {
 
   restore(snapshot: SessionSnapshot<TState>): Session<TState> {
     const session: Session<TState> = {
+      viewId: snapshot.viewId ?? snapshot.sessionId,
       sessionId: snapshot.sessionId,
       route: snapshot.route,
       params: snapshot.params,
+      ui: snapshot.ui ?? snapshot.state,
       state: snapshot.state,
       projectionVersion: snapshot.projectionVersion,
       cursor: snapshot.cursor,
@@ -114,7 +125,9 @@ export class LiveSessionRegistry<TState, TMessage> {
   }
 
   update(session: Session<TState>, message: TMessage): Session<TState> {
-    session.state = this.#definition.update(session.state, message);
+    const next = this.#definition.update(session.ui, message);
+    session.ui = next;
+    session.state = next;
     return session;
   }
 
@@ -126,9 +139,11 @@ export class LiveSessionRegistry<TState, TMessage> {
   snapshot(session: Session<TState>): SessionSnapshot<TState> {
     return {
       snapshotVersion: SESSION_SNAPSHOT_VERSION,
+      viewId: session.viewId,
       sessionId: session.sessionId,
       route: session.route,
       params: session.params,
+      ui: session.ui,
       state: session.state,
       projectionVersion: session.projectionVersion,
       cursor: session.cursor,
@@ -151,9 +166,11 @@ export { LiveSessionRegistry as SessionStore };
 
 export type SessionSnapshot<TState> = {
   snapshotVersion: number;
+  viewId?: string;
   sessionId: string;
   route: string;
   params: Record<string, string>;
+  ui?: TState;
   state: TState;
   projectionVersion: number;
   cursor: string | null;

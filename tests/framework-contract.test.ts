@@ -12,6 +12,7 @@ import {
   Effect,
   JsonFileRuntimeStore,
   Layer,
+  LiveSessionRegistry,
   MemoryRuntimeStore,
   parseClientEnvelope,
   ResourceGraph,
@@ -246,6 +247,25 @@ describe("framework contract", () => {
     expect(trace.status).toBe("success");
     expect(trace.events.map((event) => event.label)).toContain("resources observed");
     expect(trace.events.map((event) => event.label)).toContain("region patch streamed");
+  });
+
+  test("view context exposes UI checkpoint state separately from live session compatibility", () => {
+    const registry = new LiveSessionRegistry(counterSession);
+    const view = registry.create("/contract/:id", { id: "main" });
+
+    registry.update(view, { type: "session.toggle" });
+    const snapshot = registry.snapshot(view);
+
+    expect(view.viewId).toBe("view-1");
+    expect(view.sessionId).toBe("session-1");
+    expect(view.ui).toEqual({ selected: true });
+    expect(view.state).toEqual(view.ui);
+    expect(snapshot).toMatchObject({
+      viewId: "view-1",
+      sessionId: "session-1",
+      ui: { selected: true },
+      state: { selected: true },
+    });
   });
 
   test("unknown messages are rejected instead of being treated as session updates", async () => {

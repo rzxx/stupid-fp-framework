@@ -24,9 +24,9 @@ export const approvalScreen: ScreenDefinition<
   route: Route.define("/teams/:teamId/deployments", {
     params: Schema.Struct({ teamId: Schema.String }),
   }),
-  project(session, context) {
+  project(view, context) {
     return Effect.gen(function* () {
-      const teamId = session.params.teamId;
+      const teamId = view.params.teamId;
       const teams = yield* Teams;
       const auth = yield* Auth;
       const team = teams.find(teamId);
@@ -36,15 +36,15 @@ export const approvalScreen: ScreenDefinition<
           deployments.map(summary),
         ),
       );
-      const selectedDeployment = session.state.selectedDeploymentId
+      const selectedDeployment = view.ui.selectedDeploymentId
         ? yield* context.region("selectedDeployment", () =>
-            selectedDetail(session.state.selectedDeploymentId as string, context),
+            selectedDetail(view.ui.selectedDeploymentId as string, context),
           )
         : null;
 
       const tracePanel = yield* context.region("tracePanel", () =>
         Effect.succeed({
-          open: session.state.tracePanelOpen,
+          open: view.ui.tracePanelOpen,
           traces: context.traces.list(),
         }),
       );
