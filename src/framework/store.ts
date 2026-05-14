@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { SessionSnapshot } from "./session";
+import type { ViewCheckpoint } from "./view";
 import type { ServerEnvelope } from "./stream";
 import type { TraceSnapshot } from "./trace";
 
@@ -44,41 +44,41 @@ export function runtimeStoreError(
 }
 
 export type StoredEnvelope<TProjection, TTrace = TraceSnapshot> = {
-  sessionId: string;
+  viewId: string;
   cursor: string;
   envelope: ServerEnvelope<TProjection, TTrace>;
 };
 
-export type RuntimeStore<TSessionState, TProjection, TTrace = TraceSnapshot> = {
+export type RuntimeStore<TUIState, TProjection, TTrace = TraceSnapshot> = {
   capabilities: RuntimeStoreCapabilities;
-  saveSession: (snapshot: SessionSnapshot<TSessionState>) => Promise<void>;
-  loadSession: (sessionId: string) => Promise<SessionSnapshot<TSessionState> | null>;
-  listSessions: () => Promise<SessionSnapshot<TSessionState>[]>;
+  saveView: (checkpoint: ViewCheckpoint<TUIState>) => Promise<void>;
+  loadView: (viewId: string) => Promise<ViewCheckpoint<TUIState> | null>;
+  listViews: () => Promise<ViewCheckpoint<TUIState>[]>;
   nextCursor: () => Promise<string>;
   appendEnvelope: (
-    sessionId: string,
+    viewId: string,
     cursor: string,
     envelope: ServerEnvelope<TProjection, TTrace>,
   ) => Promise<void>;
   readEnvelopesAfter: (
-    sessionId: string,
+    viewId: string,
     cursor: string,
   ) => Promise<StoredEnvelope<TProjection, TTrace>[]>;
-  hasEnvelopeCursor: (sessionId: string, cursor: string) => Promise<boolean>;
+  hasEnvelopeCursor: (viewId: string, cursor: string) => Promise<boolean>;
 };
 
-type StoredState<TSessionState, TProjection, TTrace> = {
+type StoredState<TUIState, TProjection, TTrace> = {
   protocolVersion: number;
   nextCursor: number;
-  sessions: SessionSnapshot<TSessionState>[];
+  views: ViewCheckpoint<TUIState>[];
   envelopes: StoredEnvelope<TProjection, TTrace>[];
 };
 
 export class MemoryRuntimeStore<
-  TSessionState,
+  TUIState,
   TProjection,
   TTrace = TraceSnapshot,
-> implements RuntimeStore<TSessionState, TProjection, TTrace> {
+> implements RuntimeStore<TUIState, TProjection, TTrace> {
   readonly capabilities: RuntimeStoreCapabilities = {
     ephemeral: true,
     singleProcess: true,
@@ -89,20 +89,20 @@ export class MemoryRuntimeStore<
     retention: "unbounded",
   };
 
-  readonly #sessions = new Map<string, SessionSnapshot<TSessionState>>();
+  readonly #views = new Map<string, ViewCheckpoint<TUIState>>();
   readonly #envelopes: StoredEnvelope<TProjection, TTrace>[] = [];
   #nextCursor = 1;
 
-  async saveSession(snapshot: SessionSnapshot<TSessionState>): Promise<void> {
-    this.#sessions.set(snapshot.sessionId, snapshot);
+  async saveView(snapshot: ViewCheckpoint<TUIState>): Promise<void> {
+    this.#views.set(snapshot.viewId, snapshot);
   }
 
-  async loadSession(sessionId: string): Promise<SessionSnapshot<TSessionState> | null> {
-    return this.#sessions.get(sessionId) ?? null;
+  async loadView(viewId: string): Promise<ViewCheckpoint<TUIState> | null> {
+    return this.#views.get(viewId) ?? null;
   }
 
-  async listSessions(): Promise<SessionSnapshot<TSessionState>[]> {
-    return [...this.#sessions.values()].map((session) => ({ ...session }));
+  async listViews(): Promise<ViewCheckpoint<TUIState>[]> {
+    return [...this.#views.values()].map((view) => ({ ...view }));
   }
 
   async nextCursor(): Promise<string> {
@@ -111,19 +111,19 @@ export class MemoryRuntimeStore<
   }
 
   async appendEnvelope(
-    sessionId: string,
+    viewId: string,
     cursor: string,
     envelope: ServerEnvelope<TProjection, TTrace>,
   ): Promise<void> {
-    this.#envelopes.push({ sessionId, cursor, envelope });
+    this.#envelopes.push({ viewId, cursor, envelope });
   }
 
   async readEnvelopesAfter(
-    sessionId: string,
+    viewId: string,
     cursor: string,
   ): Promise<StoredEnvelope<TProjection, TTrace>[]> {
     const index = this.#envelopes.findIndex(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
+      (entry) => entry.viewId === viewId && entry.cursor === cursor,
     );
 
     if (index === -1) {
@@ -132,22 +132,20 @@ export class MemoryRuntimeStore<
 
     return this.#envelopes
       .slice(index + 1)
-      .filter((entry) => entry.sessionId === sessionId)
+      .filter((entry) => entry.viewId === viewId)
       .map((entry) => ({ ...entry }));
   }
 
-  async hasEnvelopeCursor(sessionId: string, cursor: string): Promise<boolean> {
-    return this.#envelopes.some(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
-    );
+  async hasEnvelopeCursor(viewId: string, cursor: string): Promise<boolean> {
+    return this.#envelopes.some((entry) => entry.viewId === viewId && entry.cursor === cursor);
   }
 }
 
 export class JsonFileRuntimeStore<
-  TSessionState,
+  TUIState,
   TProjection,
   TTrace = TraceSnapshot,
-> implements RuntimeStore<TSessionState, TProjection, TTrace> {
+> implements RuntimeStore<TUIState, TProjection, TTrace> {
   readonly capabilities: RuntimeStoreCapabilities = {
     ephemeral: false,
     singleProcess: true,
@@ -164,21 +162,21 @@ export class JsonFileRuntimeStore<
     this.#path = path;
   }
 
-  async saveSession(snapshot: SessionSnapshot<TSessionState>): Promise<void> {
+  async saveView(snapshot: ViewCheckpoint<TUIState>): Promise<void> {
     const state = await this.#read();
-    state.sessions = state.sessions.filter((session) => session.sessionId !== snapshot.sessionId);
-    state.sessions.push(snapshot);
+    state.views = state.views.filter((view) => view.viewId !== snapshot.viewId);
+    state.views.push(snapshot);
     await this.#write(state);
   }
 
-  async loadSession(sessionId: string): Promise<SessionSnapshot<TSessionState> | null> {
+  async loadView(viewId: string): Promise<ViewCheckpoint<TUIState> | null> {
     const state = await this.#read();
-    return state.sessions.find((session) => session.sessionId === sessionId) ?? null;
+    return state.views.find((view) => view.viewId === viewId) ?? null;
   }
 
-  async listSessions(): Promise<SessionSnapshot<TSessionState>[]> {
+  async listViews(): Promise<ViewCheckpoint<TUIState>[]> {
     const state = await this.#read();
-    return state.sessions;
+    return state.views;
   }
 
   async nextCursor(): Promise<string> {
@@ -189,56 +187,52 @@ export class JsonFileRuntimeStore<
   }
 
   async appendEnvelope(
-    sessionId: string,
+    viewId: string,
     cursor: string,
     envelope: ServerEnvelope<TProjection, TTrace>,
   ): Promise<void> {
     const state = await this.#read();
-    state.envelopes.push({ sessionId, cursor, envelope });
+    state.envelopes.push({ viewId, cursor, envelope });
     await this.#write(state);
   }
 
   async readEnvelopesAfter(
-    sessionId: string,
+    viewId: string,
     cursor: string,
   ): Promise<StoredEnvelope<TProjection, TTrace>[]> {
     const state = await this.#read();
     const index = state.envelopes.findIndex(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
+      (entry) => entry.viewId === viewId && entry.cursor === cursor,
     );
 
     if (index === -1) {
       return [];
     }
 
-    return state.envelopes.slice(index + 1).filter((entry) => entry.sessionId === sessionId);
+    return state.envelopes.slice(index + 1).filter((entry) => entry.viewId === viewId);
   }
 
-  async hasEnvelopeCursor(sessionId: string, cursor: string): Promise<boolean> {
+  async hasEnvelopeCursor(viewId: string, cursor: string): Promise<boolean> {
     const state = await this.#read();
-    return state.envelopes.some(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
-    );
+    return state.envelopes.some((entry) => entry.viewId === viewId && entry.cursor === cursor);
   }
 
-  async #read(): Promise<StoredState<TSessionState, TProjection, TTrace>> {
+  async #read(): Promise<StoredState<TUIState, TProjection, TTrace>> {
     try {
       const content = await readFile(this.#path, "utf8");
-      const parsed = JSON.parse(content) as Partial<
-        StoredState<TSessionState, TProjection, TTrace>
-      >;
+      const parsed = JSON.parse(content) as Partial<StoredState<TUIState, TProjection, TTrace>>;
 
       if (!isStoredState(parsed)) {
         throw runtimeStoreError("corrupt-store", `Runtime store ${this.#path} has invalid shape`);
       }
 
-      return parsed as StoredState<TSessionState, TProjection, TTrace>;
+      return parsed as StoredState<TUIState, TProjection, TTrace>;
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return {
           protocolVersion: RUNTIME_STORE_PROTOCOL_VERSION,
           nextCursor: 1,
-          sessions: [],
+          views: [],
           envelopes: [],
         };
       }
@@ -255,7 +249,7 @@ export class JsonFileRuntimeStore<
     }
   }
 
-  async #write(state: StoredState<TSessionState, TProjection, TTrace>): Promise<void> {
+  async #write(state: StoredState<TUIState, TProjection, TTrace>): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
     await writeFile(
       this.#path,
@@ -268,7 +262,7 @@ function isStoredState(value: Partial<StoredState<unknown, unknown, unknown>>): 
   return (
     value.protocolVersion === RUNTIME_STORE_PROTOCOL_VERSION &&
     typeof value.nextCursor === "number" &&
-    Array.isArray(value.sessions) &&
+    Array.isArray(value.views) &&
     Array.isArray(value.envelopes)
   );
 }

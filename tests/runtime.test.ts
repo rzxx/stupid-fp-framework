@@ -10,7 +10,7 @@ import {
 } from "../src/framework";
 
 describe("prototype runtime", () => {
-  test("connect creates a session and initial projection", async () => {
+  test("connect creates a view and initial projection", async () => {
     const runtime = createApprovalRuntime();
     const result = await runtime.connect({
       type: "connect",
@@ -26,16 +26,16 @@ describe("prototype runtime", () => {
     expect(projection.projection.selectedDeployment).toBeNull();
   });
 
-  test("session selection changes projection without mutating durable workflow state", async () => {
+  test("view selection changes projection without mutating durable workflow state", async () => {
     const runtime = createApprovalRuntime();
     const connected = await connect(runtime);
     const before = latestProjection(connected.envelopes).projection;
     const deploymentId = before.pendingDeployments[0]?.id;
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "ui.deployment.select", deploymentId },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "ui.deployment.select", deploymentId },
     });
     const patch = latestPatch(result.envelopes);
     const trace = result.envelopes.find((envelope) => envelope.type === "trace:update");
@@ -64,9 +64,9 @@ describe("prototype runtime", () => {
     const deploymentId = latestProjection(connected.envelopes).projection.pendingDeployments[0]?.id;
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.approveDeployment", deploymentId },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.approveDeployment", deploymentId },
     });
 
     expect(result.envelopes.map((envelope) => envelope.type)).toEqual([
@@ -86,22 +86,22 @@ describe("prototype runtime", () => {
       type: "error",
       message: "Malformed JSON envelope",
     });
-    expect(parseClientEnvelope(JSON.stringify({ type: "message" }))).toMatchObject({
+    expect(parseClientEnvelope(JSON.stringify({ type: "input" }))).toMatchObject({
       type: "error",
-      message: "Invalid message envelope",
+      message: "Invalid input envelope",
     });
   });
 
-  test("unknown session returns an error envelope", async () => {
+  test("unknown view returns an error envelope", async () => {
     const runtime = createApprovalRuntime();
     const result = await runtime.receive({
-      type: "message",
-      sessionId: "missing",
-      message: { type: "ui.trace.toggle" },
+      type: "input",
+      viewId: "missing",
+      input: { type: "ui.trace.toggle" },
     });
 
     expect(result.envelopes).toEqual([
-      { type: "error", sessionId: "missing", message: "Unknown session" },
+      { type: "error", viewId: "missing", message: "Unknown view" },
     ]);
   });
 });
@@ -118,7 +118,7 @@ async function connect(runtime: ReturnType<typeof createApprovalRuntime>) {
     throw new Error("Expected connected envelope");
   }
 
-  return { sessionId: connected.sessionId, envelopes: result.envelopes };
+  return { viewId: connected.viewId, envelopes: result.envelopes };
 }
 
 function latestProjection(

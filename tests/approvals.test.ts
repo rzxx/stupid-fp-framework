@@ -14,9 +14,9 @@ describe("deployment approval workflow", () => {
     expect(deploymentId).toBeString();
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.approveDeployment", deploymentId },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.approveDeployment", deploymentId },
     });
     const patch = latestPatch(result.envelopes);
     const actionResult = result.envelopes.find((envelope) => envelope.type === "action:result");
@@ -56,9 +56,9 @@ describe("deployment approval workflow", () => {
     const auditCount = services.audit.forDeployment(deploymentId).length;
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.approveDeployment", deploymentId },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.approveDeployment", deploymentId },
     });
     const actionResult = result.envelopes.find((envelope) => envelope.type === "action:result");
 
@@ -74,9 +74,9 @@ describe("deployment approval workflow", () => {
     const auditCount = services.audit.forDeployment("deploy-search-23").length;
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: {
+      type: "input",
+      viewId: connected.viewId,
+      input: {
         type: "action.approveDeployment",
         deploymentId: "deploy-search-23",
       },
@@ -101,7 +101,7 @@ async function connect(runtime: ReturnType<typeof createApprovalRuntime>) {
     throw new Error("Expected connected envelope");
   }
 
-  return { sessionId: connected.sessionId, projection: projection.projection };
+  return { viewId: connected.viewId, projection: projection.projection };
 }
 
 function latestProjection(

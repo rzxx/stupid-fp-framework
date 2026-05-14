@@ -1,6 +1,6 @@
 import type { Effect, Layer } from "./effect";
 import type { SerializedResourceKey } from "./resource";
-import type { Session } from "./session";
+import type { ViewContext } from "./view";
 import type { TraceEvent, TraceSnapshot } from "./trace";
 
 export type FrameworkPlugin<R = never> = {
@@ -13,7 +13,7 @@ export type FrameworkHooks<R> = {
   action?: ActionHooks<R>;
   resource?: ResourceHooks<R>;
   route?: RouteHooks<R>;
-  session?: SessionHooks<R>;
+  view?: ViewHooks<R>;
   trace?: TraceHooks<R>;
   host?: HostHooks<R>;
   renderer?: RendererHooks<R>;
@@ -27,7 +27,7 @@ export type ActionHooks<R> = {
 
 export type ActionHookContext = {
   actionType: string;
-  message: { type: string };
+  input: { type: string };
   trace: TraceSnapshot;
 };
 
@@ -56,19 +56,19 @@ export type RouteHookContext = {
   matchedRoute: string | null;
 };
 
-export type SessionHooks<R> = {
-  create?: (context: SessionHookContext<unknown>) => Effect.Effect<void, never, R>;
-  restore?: (context: SessionHookContext<unknown>) => Effect.Effect<void, never, R>;
-  update?: (context: SessionUpdateHookContext<unknown>) => Effect.Effect<void, never, R>;
+export type ViewHooks<R> = {
+  create?: (context: ViewHookContext<unknown>) => Effect.Effect<void, never, R>;
+  restore?: (context: ViewHookContext<unknown>) => Effect.Effect<void, never, R>;
+  update?: (context: ViewUpdateHookContext<unknown>) => Effect.Effect<void, never, R>;
 };
 
-export type SessionHookContext<TState> = {
-  session: Session<TState>;
+export type ViewHookContext<TState> = {
+  view: ViewContext<TState>;
 };
 
-export type SessionUpdateHookContext<TState> = {
-  session: Session<TState>;
-  message: { type: string };
+export type ViewUpdateHookContext<TState> = {
+  view: ViewContext<TState>;
+  input: { type: string };
 };
 
 export type TraceHooks<R> = {
@@ -87,11 +87,11 @@ export type HostHooks<R> = {
 };
 
 export type HostHookContext = {
-  sessionId: string;
+  viewId: string;
 };
 
 export type HostSendHookContext = {
-  sessionId?: string;
+  viewId?: string;
   envelopeType: string;
 };
 
@@ -101,7 +101,7 @@ export type RendererHooks<R> = {
 };
 
 export type RendererHookContext = {
-  sessionId: string;
+  viewId: string;
   projectionVersion: number;
 };
 
@@ -117,8 +117,8 @@ export function routeHooks<R>(plugins: readonly FrameworkPlugin<R>[]): RouteHook
   return plugins.map((plugin) => plugin.hooks?.route).filter((hook) => hook !== undefined);
 }
 
-export function sessionHooks<R>(plugins: readonly FrameworkPlugin<R>[]): SessionHooks<R>[] {
-  return plugins.map((plugin) => plugin.hooks?.session).filter((hook) => hook !== undefined);
+export function viewHooks<R>(plugins: readonly FrameworkPlugin<R>[]): ViewHooks<R>[] {
+  return plugins.map((plugin) => plugin.hooks?.view).filter((hook) => hook !== undefined);
 }
 
 export function traceHooks<R>(plugins: readonly FrameworkPlugin<R>[]): TraceHooks<R>[] {

@@ -33,5 +33,3 @@ export const approvalUIState: UIStateDefinition<ApprovalUIState, ApprovalUIEvent
     },
   ],
 });
-
-export const approvalSession = approvalUIState;

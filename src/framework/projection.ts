@@ -2,7 +2,7 @@ import type { Effect } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
 import type { ResourceFailure, ResourceGraph } from "./resource";
 import type { RouteDefinition } from "./route";
-import type { ViewContext } from "./session";
+import type { ViewContext } from "./view";
 import type { TraceReader } from "./trace";
 
 export type ProjectionRegionSnapshot = {
@@ -29,10 +29,10 @@ export type ProjectionContext<R> = {
   ) => Effect.Effect<TValue, E, R>;
 };
 
-export type ScreenDefinition<R, TSessionState, TProjection> = {
+export type ScreenDefinition<R, TUIState, TProjection> = {
   route: string | RouteDefinition;
   project: (
-    view: ViewContext<TSessionState>,
+    view: ViewContext<TUIState>,
     context: ProjectionContext<R>,
   ) => Effect.Effect<TProjection, ProjectionFailure | ResourceFailure, R>;
 };

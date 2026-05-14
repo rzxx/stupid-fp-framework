@@ -22,16 +22,16 @@ export type ActionEffect<TResult extends JsonValue | void = void, R = never> = E
   R
 >;
 
-type ActionRunner<R, TMessage, TResult extends JsonValue | void> = {
-  run(message: TMessage, context: ActionContext): ActionEffect<TResult, R>;
+type ActionRunner<R, TInput, TResult extends JsonValue | void> = {
+  run(input: TInput, context: ActionContext): ActionEffect<TResult, R>;
 }["run"];
 
-export type ActionValidator<TMessage> = (message: unknown) => message is TMessage;
+export type ActionValidator<TInput> = (input: unknown) => input is TInput;
 
-export type ActionDefinition<R, TMessage, TResult extends JsonValue | void = JsonValue | void> = {
+export type ActionDefinition<R, TInput, TResult extends JsonValue | void = JsonValue | void> = {
   type: string;
-  accepts: ActionValidator<TMessage>;
-  run: ActionRunner<R, TMessage, TResult>;
+  accepts: ActionValidator<TInput>;
+  run: ActionRunner<R, TInput, TResult>;
 };
 
 export type ActionExecution = {
@@ -46,25 +46,25 @@ export function actionFailure(message: string, detail?: JsonRecord): ActionFailu
 }
 
 export function defineAction<
-  TMessage extends { type: string },
+  TInput extends { type: string },
   TResult extends JsonValue | void = void,
   R = never,
 >(
-  type: TMessage["type"],
-  accepts: ActionValidator<TMessage>,
-  run: (message: TMessage, context: ActionContext) => ActionEffect<TResult, R>,
-): ActionDefinition<R, TMessage, TResult> {
+  type: TInput["type"],
+  accepts: ActionValidator<TInput>,
+  run: (input: TInput, context: ActionContext) => ActionEffect<TResult, R>,
+): ActionDefinition<R, TInput, TResult> {
   return { type, accepts, run };
 }
 
 export const Action = {
   define<TType extends string>(type: TType) {
     return {
-      input<TMessage extends { type: TType }>(schema: FrameworkSchema<TMessage>) {
+      input<TInput extends { type: TType }>(schema: FrameworkSchema<TInput>) {
         return {
           run<TResult extends JsonValue | void = void, R = never>(
-            run: (message: TMessage, context: ActionContext) => ActionEffect<TResult, R>,
-          ): ActionDefinition<R, TMessage, TResult> {
+            run: (input: TInput, context: ActionContext) => ActionEffect<TResult, R>,
+          ): ActionDefinition<R, TInput, TResult> {
             return defineAction(type, acceptsSchema(schema), run);
           },
         };
@@ -73,9 +73,9 @@ export const Action = {
   },
 };
 
-export async function executeAction<R, TMessage extends { type: string }>(
-  action: ActionDefinition<R, TMessage>,
-  message: unknown,
+export async function executeAction<R, TInput extends { type: string }>(
+  action: ActionDefinition<R, TInput>,
+  input: unknown,
   runtime: ManagedRuntime.ManagedRuntime<R, never>,
   traces: TraceStore,
   trace: TraceSnapshot,
@@ -96,23 +96,23 @@ export async function executeAction<R, TMessage extends { type: string }>(
 
   traces.add(trace, "action", `${String(action.type)} started`);
 
-  if (!action.accepts(message)) {
+  if (!action.accepts(input)) {
     const error = `Invalid action payload: ${String(action.type)}`;
     traces.fail(trace, error);
     return { ok: false, error, invalidated };
   }
 
-  const actionMessage = message as { type: string };
+  const actionInput = input as { type: string };
 
   await runtime.runPromise(
     Effect.forEach(
       hooks,
       (hook) =>
-        hook.before?.({ actionType: action.type, message: actionMessage, trace }) ?? Effect.void,
+        hook.before?.({ actionType: action.type, input: actionInput, trace }) ?? Effect.void,
     ),
   );
 
-  const result = await runtime.runPromise(Effect.either(action.run(message, context)));
+  const result = await runtime.runPromise(Effect.either(action.run(input, context)));
 
   if (result._tag === "Left") {
     const message = result.left.message;
@@ -123,7 +123,7 @@ export async function executeAction<R, TMessage extends { type: string }>(
         (hook) =>
           hook.failure?.({
             actionType: action.type,
-            message: actionMessage,
+            input: actionInput,
             trace,
             error: message,
           }) ?? Effect.void,
@@ -135,7 +135,7 @@ export async function executeAction<R, TMessage extends { type: string }>(
         (hook) =>
           hook.after?.({
             actionType: action.type,
-            message: actionMessage,
+            input: actionInput,
             trace,
             ok: false,
           }) ?? Effect.void,
@@ -150,7 +150,7 @@ export async function executeAction<R, TMessage extends { type: string }>(
       (hook) =>
         hook.after?.({
           actionType: action.type,
-          message: actionMessage,
+          input: actionInput,
           trace,
           ok: true,
         }) ?? Effect.void,

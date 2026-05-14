@@ -10,17 +10,17 @@ import {
   type TraceEnvelope,
 } from "./stream";
 
-export type BunRuntime<TMessage, TProjection, TTrace> = {
+export type BunRuntime<TInput, TProjection, TTrace> = {
   connect: (
-    envelope: Extract<ClientEnvelope<TMessage>, { type: "connect" }>,
+    envelope: Extract<ClientEnvelope<TInput>, { type: "connect" }>,
   ) => Promise<{ envelopes: ServerEnvelope<TProjection, TTrace>[] }>;
   receive: (
-    envelope: Extract<ClientEnvelope<TMessage>, { type: "message" }>,
+    envelope: Extract<ClientEnvelope<TInput>, { type: "input" }>,
   ) => Promise<{ envelopes: ServerEnvelope<TProjection, TTrace>[] }>;
 };
 
-export type BunProgramHostOptions<TMessage, TProjection, TTrace> = {
-  runtime: BunRuntime<TMessage, TProjection, TTrace>;
+export type BunProgramHostOptions<TInput, TProjection, TTrace> = {
+  runtime: BunRuntime<TInput, TProjection, TTrace>;
   rootDir: string;
   clientEntry: string;
   shellPath: string;
@@ -38,8 +38,8 @@ export type BunProgramHostOptions<TMessage, TProjection, TTrace> = {
   };
 };
 
-export async function serveBunProgram<TMessage, TProjection, TTrace>(
-  options: BunProgramHostOptions<TMessage, TProjection, TTrace>,
+export async function serveBunProgram<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
 ): Promise<Bun.Server<unknown>> {
   const outdir = options.outdir ?? join(options.rootDir, "..", "dist");
   const clientOut = join(outdir, "app.js");
@@ -95,7 +95,7 @@ export async function serveBunProgram<TMessage, TProjection, TTrace>(
     },
     websocket: {
       async message(socket, payload) {
-        const parsed = parseClientEnvelope<TMessage>(String(payload));
+        const parsed = parseClientEnvelope<TInput>(String(payload));
 
         if (parsed.type === "error") {
           socket.send(JSON.stringify(parsed));
@@ -132,7 +132,7 @@ function bootstrapFromEnvelopes<TProjection, TTrace>(
   }
 
   return {
-    sessionId: connected.sessionId,
+    viewId: connected.viewId,
     cursor: projection.cursor,
     resumed: connected.resumed,
     resume: connected.resume,
@@ -193,8 +193,8 @@ async function buildClient(entrypoint: string, outdir: string): Promise<void> {
 }
 
 class SocketDelivery<TProjection, TTrace> {
-  readonly #sessionSockets = new Map<string, Set<Bun.ServerWebSocket<unknown>>>();
-  readonly #socketSession = new WeakMap<Bun.ServerWebSocket<unknown>, string>();
+  readonly #viewsockets = new Map<string, Set<Bun.ServerWebSocket<unknown>>>();
+  readonly #socketview = new WeakMap<Bun.ServerWebSocket<unknown>, string>();
 
   send(
     current: Bun.ServerWebSocket<unknown>,
@@ -202,13 +202,13 @@ class SocketDelivery<TProjection, TTrace> {
   ): void {
     for (const envelope of envelopes) {
       if (envelope.type === "connected") {
-        this.#attach(current, envelope.sessionId);
+        this.#attach(current, envelope.viewId);
         current.send(JSON.stringify(envelope));
         continue;
       }
 
-      if ("sessionId" in envelope && envelope.sessionId) {
-        const sockets = this.#sessionSockets.get(envelope.sessionId);
+      if ("viewId" in envelope && envelope.viewId) {
+        const sockets = this.#viewsockets.get(envelope.viewId);
 
         if (sockets && sockets.size > 0) {
           for (const socket of sockets) {
@@ -224,32 +224,32 @@ class SocketDelivery<TProjection, TTrace> {
   }
 
   close(socket: Bun.ServerWebSocket<unknown>): void {
-    const sessionId = this.#socketSession.get(socket);
+    const viewId = this.#socketview.get(socket);
 
-    if (!sessionId) {
+    if (!viewId) {
       return;
     }
 
-    this.#socketSession.delete(socket);
-    const sockets = this.#sessionSockets.get(sessionId);
+    this.#socketview.delete(socket);
+    const sockets = this.#viewsockets.get(viewId);
     sockets?.delete(socket);
 
     if (sockets?.size === 0) {
-      this.#sessionSockets.delete(sessionId);
+      this.#viewsockets.delete(viewId);
     }
   }
 
-  #attach(socket: Bun.ServerWebSocket<unknown>, sessionId: string): void {
+  #attach(socket: Bun.ServerWebSocket<unknown>, viewId: string): void {
     this.close(socket);
 
-    let sockets = this.#sessionSockets.get(sessionId);
+    let sockets = this.#viewsockets.get(viewId);
 
     if (!sockets) {
       sockets = new Set();
-      this.#sessionSockets.set(sessionId, sockets);
+      this.#viewsockets.set(viewId, sockets);
     }
 
     sockets.add(socket);
-    this.#socketSession.set(socket, sessionId);
+    this.#socketview.set(socket, viewId);
   }
 }

@@ -21,11 +21,11 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
   applyPatch?: (projection: TProjection, envelope: ProjectionPatchEnvelope) => TProjection;
 };
 
-export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
+export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
   connection: {
     status: ConnectionState;
   };
-  session: {
+  view: {
     id: string | null;
     resumed: boolean;
     resume: ResumeResult | null;
@@ -47,15 +47,15 @@ export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
   diagnostics: {
     lastPatch: ProjectionPatchEnvelope | null;
   };
-  send: (message: TMessage) => void;
+  send: (input: TInput) => void;
 };
 
-export function useProgramStream<TMessage, TProjection, TTrace extends { traceId: string }>(
+export function useProgramStream<TInput, TProjection, TTrace extends { traceId: string }>(
   options: ProgramStreamReactOptions<TProjection, TTrace>,
-): ProgramStreamReactState<TMessage, TProjection, TTrace> {
-  const stream = useRef<ProgramStreamClient<TMessage> | null>(null);
+): ProgramStreamReactState<TInput, TProjection, TTrace> {
+  const stream = useRef<ProgramStreamClient<TInput> | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [sessionId, setSessionId] = useState<string | null>(options.bootstrap?.sessionId ?? null);
+  const [viewId, setViewId] = useState<string | null>(options.bootstrap?.viewId ?? null);
   const [resumed, setResumed] = useState(options.bootstrap?.resumed ?? false);
   const [resume, setResume] = useState<ResumeResult | null>(options.bootstrap?.resume ?? null);
   const [projection, setProjection] = useState<TProjection | null>(
@@ -79,15 +79,15 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
   } = options;
 
   useEffect(() => {
-    stream.current = connectProgramStream<TMessage, TProjection, TTrace>({
+    stream.current = connectProgramStream<TInput, TProjection, TTrace>({
       route,
       params,
       storageKey,
       bootstrap,
       handlers: {
         onConnectionState: setConnection,
-        onSession(nextSessionId, nextResumed, nextResume) {
-          setSessionId(nextSessionId);
+        onView(nextViewId, nextResumed, nextResume) {
+          setViewId(nextViewId);
           setResumed(nextResumed);
           setResume(nextResume);
         },
@@ -107,7 +107,7 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
           if (!patchProjection) {
             setLastError({
               type: "error",
-              sessionId: envelope.sessionId,
+              viewId: envelope.viewId,
               message: "No projection patch applier configured",
             });
             return;
@@ -117,7 +117,7 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
             if (!current) {
               setLastError({
                 type: "error",
-                sessionId: envelope.sessionId,
+                viewId: envelope.viewId,
                 message: "Cannot apply projection patch before projection is available",
               });
               return current;
@@ -130,7 +130,7 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
             } catch (error) {
               setLastError({
                 type: "error",
-                sessionId: envelope.sessionId,
+                viewId: envelope.viewId,
                 message:
                   error instanceof Error ? error.message : "Failed to apply projection patch",
               });
@@ -164,8 +164,8 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
     connection: {
       status: connection,
     },
-    session: {
-      id: sessionId,
+    view: {
+      id: viewId,
       resumed,
       resume,
       cursor,
@@ -186,8 +186,8 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
     diagnostics: {
       lastPatch,
     },
-    send(message) {
-      stream.current?.send(message);
+    send(input) {
+      stream.current?.send(input);
     },
   };
 }

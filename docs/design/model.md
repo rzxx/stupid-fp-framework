@@ -178,7 +178,7 @@ It may hold runtime/view data:
 - projection version and cursor
 - observed regions and resources
 
-Live sessions are a host optimization over view contexts. They are useful, but process memory is not trusted as durable truth. If a process dies, the runtime should restore or rebuild from domain resources, view checkpoints, stream history, or client-provided cursors.
+Live views are a host optimization over view contexts. They are useful, but process memory is not trusted as durable truth. If a process dies, the runtime should restore or rebuild from domain resources, view checkpoints, stream history, or client-provided cursors.
 
 ### Projection
 

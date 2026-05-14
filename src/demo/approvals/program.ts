@@ -8,9 +8,9 @@ import {
   type ApprovalEnvironment,
   type ApprovalServices,
 } from "./services";
-import { approvalSession } from "./session";
+import { approvalUIState } from "./ui-state";
 import type {
-  ApprovalActionMessage,
+  ApprovalActionInput,
   ApprovalProjection,
   ApprovalUIEvent,
   ApprovalUIState,
@@ -27,12 +27,12 @@ export function createApprovalProgram(options?: {
     ApprovalEnvironment,
     ApprovalUIState,
     ApprovalUIEvent,
-    ApprovalActionMessage,
+    ApprovalActionInput,
     ApprovalProjection
   >({
     layer: createApprovalLayer(services),
     resources: approvalResources,
-    uiState: approvalSession,
+    uiState: approvalUIState,
     screen: approvalScreen,
     actions: approvalActions,
   });

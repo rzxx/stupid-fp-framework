@@ -10,7 +10,7 @@ export * from "./resource";
 export * from "./route";
 export * from "./runtime";
 export * from "./schema";
-export * from "./session";
+export * from "./view";
 export * from "./store";
 export * from "./stream";
 export * from "./stateless-runtime";

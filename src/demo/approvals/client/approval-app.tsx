@@ -5,7 +5,7 @@ import {
   type ProgramStreamReactOptions,
 } from "../../../adapters/react";
 import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
-import type { ApprovalClientMessage, ApprovalProjection } from "../types";
+import type { ApprovalClientInput, ApprovalProjection } from "../types";
 
 export function ApprovalApp(props: {
   bootstrap?: ProgramStreamBootstrap<ApprovalProjection, TraceSnapshot>;
@@ -43,7 +43,7 @@ export function ApprovalApp(props: {
         }),
     };
   }, [props.bootstrap]);
-  const stream = useProgramStream<ApprovalClientMessage, ApprovalProjection, TraceSnapshot>(
+  const stream = useProgramStream<ApprovalClientInput, ApprovalProjection, TraceSnapshot>(
     streamOptions,
   );
 
@@ -60,11 +60,9 @@ export function ApprovalApp(props: {
         </div>
         <div className="status-strip">
           <span data-state={stream.connection.status}>{stream.connection.status}</span>
-          <span>{stream.session.id ?? "no session"}</span>
-          <span>
-            {stream.session.resume?.status ?? (stream.session.resumed ? "resumed" : "fresh")}
-          </span>
-          <span>{stream.session.cursor ?? "no cursor"}</span>
+          <span>{stream.view.id ?? "no view"}</span>
+          <span>{stream.view.resume?.status ?? (stream.view.resumed ? "resumed" : "fresh")}</span>
+          <span>{stream.view.cursor ?? "no cursor"}</span>
           <span>projection v{stream.projection.version}</span>
         </div>
       </header>
@@ -255,7 +253,7 @@ function TracePanel(props: {
           <p className="empty-state">No messages yet.</p>
         )
       ) : (
-        <p className="empty-state">Trace panel is session state on the server.</p>
+        <p className="empty-state">Trace panel is view state on the server.</p>
       )}
     </section>
   );

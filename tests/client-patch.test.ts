@@ -11,7 +11,7 @@ describe("client projection patches", () => {
     };
     const patch: ProjectionPatchEnvelope = {
       type: "projection:patch",
-      sessionId: "session-1",
+      viewId: "view-1",
       cursor: "cursor-2",
       projectionVersion: 2,
       patch: {
@@ -41,7 +41,7 @@ describe("client projection patches", () => {
   test("rejects patches without a registered region handler", () => {
     const patch: ProjectionPatchEnvelope = {
       type: "projection:patch",
-      sessionId: "session-1",
+      viewId: "view-1",
       cursor: "cursor-2",
       projectionVersion: 2,
       patch: {

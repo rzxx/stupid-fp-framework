@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { JsonFileRuntimeStore, serveBunProgram, type TraceSnapshot } from "./framework";
 import { createApprovalRuntime } from "./demo/approvals/program";
-import type { ApprovalClientMessage, ApprovalProjection } from "./demo/approvals/types";
+import type { ApprovalClientInput, ApprovalProjection } from "./demo/approvals/types";
 import { renderApprovalApp } from "./demo/approvals/client/render-approval";
 
 const root = import.meta.dir;
@@ -12,7 +12,7 @@ const runtime = createApprovalRuntime({
 });
 const port = Number(Bun.env.PORT ?? 3000);
 
-const server = await serveBunProgram<ApprovalClientMessage, ApprovalProjection, TraceSnapshot>({
+const server = await serveBunProgram<ApprovalClientInput, ApprovalProjection, TraceSnapshot>({
   runtime,
   rootDir: root,
   clientEntry: join(root, "demo", "approvals", "client", "app.tsx"),

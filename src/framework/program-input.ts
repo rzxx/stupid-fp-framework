@@ -2,9 +2,9 @@ import type { ResourceKey } from "./resource";
 
 export type ProgramInputKind = "action" | "ui" | "resource" | "system";
 
-export type ActionProgramInput<TMessage extends { type: string }> = {
+export type ActionProgramInput<TInput extends { type: string }> = {
   kind: "action";
-  message: TMessage;
+  input: TInput;
 };
 
 export type UIProgramInput<TEvent extends { type: string }> = {
@@ -35,15 +35,15 @@ export type SystemEvent =
     }
   | {
       type: "system.resume";
-      sessionId: string;
+      viewId: string;
       cursor: string;
     };
 
 export type ProgramInput<
-  TActionMessage extends { type: string },
+  TActionInput extends { type: string },
   TUIEvent extends { type: string },
 > =
-  | ActionProgramInput<TActionMessage>
+  | ActionProgramInput<TActionInput>
   | UIProgramInput<TUIEvent>
   | ResourceProgramInput
   | SystemProgramInput;

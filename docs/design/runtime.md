@@ -1,6 +1,6 @@
 # Runtime Architecture
 
-This file describes the framework's runtime shape: host, kernel, resource graph, sessions, stream, React adapter, traces, and the relationship to RSC/Flight. For vocabulary and thesis context, read [model.md](model.md) first.
+This file describes the framework's runtime shape: host, kernel, resource graph, views, stream, React adapter, traces, and the relationship to RSC/Flight. For vocabulary and thesis context, read [model.md](model.md) first.
 
 ## Runtime Shape
 
@@ -14,7 +14,7 @@ flowchart LR
   Runtime["Server Program Runtime"]
   Actions["Action / Effect Executor"]
   Resources["Resource Graph"]
-  Sessions["Session Runtime"]
+  Views["View Runtime"]
   Trace["Trace Store"]
   Durable["Durable State"]
 
@@ -23,13 +23,13 @@ flowchart LR
   Bun <--> Runtime
   Runtime <--> Actions
   Runtime <--> Resources
-  Runtime <--> Sessions
+  Runtime <--> Views
   Actions <--> Durable
   Resources <--> Durable
   Runtime --> Trace
   Actions --> Trace
   Resources --> Trace
-  Sessions --> Trace
+  Views --> Trace
 ```
 
 ### Bun Host
@@ -53,9 +53,9 @@ The server program runtime is the kernel.
 
 Responsibilities:
 
-- receive messages from the stream
-- create or resume sessions
-- route messages to actions or session updates
+- receive inputs from the stream
+- create or resume views
+- route inputs to actions or UI events
 - resolve screens and observed resources
 - coordinate projection recomputation
 - emit stream patches
@@ -71,7 +71,7 @@ Responsibilities:
 
 - identify resources by stable typed keys
 - read resource values through effectful loaders
-- track which screens or sessions observe which resources
+- track which screens or views observe which resources
 - mark resources stale after actions
 - recompute affected projections
 - support live resource updates later
@@ -95,23 +95,23 @@ Responsibilities:
 
 This is where the functional programming influence should become practical. Effects are explicit because we want testability, traceability, and clear app boundaries, not because we want type theory theater.
 
-### Session Runtime
+### View Runtime
 
-The session runtime owns per-tab conversation state.
+The view runtime owns per-tab conversation state.
 
 Responsibilities:
 
-- initialize session state
-- apply session updates
-- associate a browser stream with a session
+- initialize UI state
+- apply UI events
+- associate a browser stream with a view
 - remember observed resources and screen context
 - support reconnect cursors
 - restore or rebuild state after disconnect
 
-The session is allowed to make the app feel live. It should not become an unsafe hidden database. The key design pressure is:
+The view is allowed to make the app feel live. It should not become an unsafe hidden database. The key design pressure is:
 
 ```txt
-If losing this state would corrupt the product, it should be a resource, not only session state.
+If losing this state would corrupt the product, it should be a resource, not only view state.
 ```
 
 ### Stream Protocol
@@ -120,7 +120,7 @@ The stream protocol is the framework-owned communication layer.
 
 It should carry:
 
-- browser messages to the server
+- browser inputs to the server
 - server projections to the browser
 - incremental patches
 - action lifecycle events
@@ -128,7 +128,7 @@ It should carry:
 - trace events
 - reconnect and resume cursors
 
-The first stream can be intentionally small. It only needs to prove that server messages can update the UI without conventional endpoint calls or traditional SSR.
+The first stream can be intentionally small. It only needs to prove that typed inputs can update the UI without conventional endpoint calls or traditional SSR.
 
 The stream should be custom at first. React Flight and RSC should remain inspirations and possible adapters, not the framework kernel.
 
@@ -139,7 +139,7 @@ The React adapter renders projections and hosts React components.
 Responsibilities:
 
 - mount the app shell
-- connect browser events to framework messages
+- connect browser events to framework inputs
 - render server projections
 - host client islands
 - preserve compatibility with normal React components
@@ -153,12 +153,12 @@ The trace model records causality.
 
 Responsibilities:
 
-- assign trace IDs to messages/actions
+- assign trace IDs to inputs/actions
 - capture validation, auth, effects, writes, invalidations, and patches
 - expose enough data for a timeline/debug panel
 - help prove that the architecture makes apps easier to understand
 
-The smallest useful trace is probably a structured list of events per message. It does not need a polished UI first. It does need to exist early enough to shape the runtime.
+The smallest useful trace is probably a structured list of events per input. It does not need a polished UI first. It does need to exist early enough to shape the runtime.
 
 ## Runtime Flows
 
@@ -168,7 +168,7 @@ The smallest useful trace is probably a structured list of events per message. I
 1. Bun serves a minimal app shell.
 2. The React adapter opens a framework stream.
 3. The browser sends route, client identity, and optional resume cursor.
-4. The server program creates or resumes a session.
+4. The server program creates or resumes a view.
 5. The screen resolves route params and observed resources.
 6. The resource graph reads current resource values.
 7. The program computes a projection.
@@ -182,7 +182,7 @@ This may produce HTML or JSX-like output as an implementation detail, but the co
 
 ```txt
 1. User clicks Approve.
-2. React adapter sends an approveDeployment message.
+2. React adapter sends an approveDeployment input.
 3. Runtime starts a trace.
 4. Action executor validates input.
 5. Executor runs auth and permission effects.
@@ -201,7 +201,7 @@ The developer sees one workflow transaction rather than a frontend event, an API
 ```txt
 1. Incident timeline receives a new event.
 2. IncidentTimeline(id) resource changes or is invalidated.
-3. Resource graph finds connected sessions observing it.
+3. Resource graph finds connected views observing it.
 4. Runtime recomputes the timeline projection.
 5. Stream sends a patch to each relevant browser.
 ```
@@ -212,8 +212,8 @@ This is the LiveView-like feeling, but the durable resource remains the source o
 
 ```txt
 1. Browser loses the stream.
-2. Browser reconnects with session ID and last known cursor.
-3. Runtime restores session snapshot if available.
+2. Browser reconnects with view ID and last known cursor.
+3. Runtime restores view snapshot if available.
 4. Runtime re-observes durable resources.
 5. Missing stream events are replayed if possible.
 6. If replay is not possible, the current projection is recomputed.
@@ -236,14 +236,14 @@ But the framework kernel should not start as a Flight implementation.
 Reasons:
 
 - Flight would make React's internal protocol shape the core model too early.
-- The project needs freedom to experiment with sessions, resources, traces, and renderer-agnostic projections.
+- The project needs freedom to experiment with views, resources, traces, and renderer-agnostic projections.
 - React's RSC framework integration surface is still a specialized and unstable area.
 - We want to learn whether the server-program model works before adopting a specific transport.
 
 The intended relationship:
 
 ```txt
-Framework kernel owns: program, messages, resources, sessions, effects, traces.
+Framework kernel owns: program, messages, resources, views, effects, traces.
 React adapter owns: rendering, client islands, ecosystem compatibility.
 Future Flight adapter may own: RSC-compatible payload transport if it fits.
 ```

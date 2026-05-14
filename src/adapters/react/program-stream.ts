@@ -14,7 +14,7 @@ export type ConnectionState = "connecting" | "open" | "closed" | "error";
 
 export type ProgramStreamHandlers<TProjection, TTrace> = {
   onConnectionState: (state: ConnectionState) => void;
-  onSession: (sessionId: string, resumed: boolean, resume: ResumeResult) => void;
+  onView: (viewId: string, resumed: boolean, resume: ResumeResult) => void;
   onProjection: (envelope: ProjectionEnvelope<TProjection>) => void;
   onPatch?: (envelope: ProjectionPatchEnvelope) => void;
   onTrace: (envelope: TraceEnvelope<TTrace>) => void;
@@ -31,8 +31,8 @@ export type ProgramStreamOptions<TProjection, TTrace> = {
   environment?: ProgramStreamEnvironment;
 };
 
-export type ProgramStreamClient<TMessage> = {
-  send: (message: TMessage) => void;
+export type ProgramStreamClient<TInput> = {
+  send: (input: TInput) => void;
   close: () => void;
 };
 
@@ -47,16 +47,16 @@ export type ProgramStreamSocket = Pick<WebSocket, "addEventListener" | "close" |
 export type ProgramStreamStorage = Pick<Storage, "getItem" | "setItem">;
 
 type ResumeState = {
-  sessionId: string;
+  viewId: string;
   cursor: string;
 };
 
-export function connectProgramStream<TMessage, TProjection, TTrace>(
+export function connectProgramStream<TInput, TProjection, TTrace>(
   options: ProgramStreamOptions<TProjection, TTrace>,
-): ProgramStreamClient<TMessage> {
+): ProgramStreamClient<TInput> {
   const url = options.environment?.streamUrl ?? streamUrl();
   const socket = options.environment?.createSocket?.(url) ?? new WebSocket(url);
-  let sessionId: string | null = null;
+  let viewId: string | null = null;
 
   options.handlers.onConnectionState("connecting");
 
@@ -64,13 +64,13 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
     options.handlers.onConnectionState("open");
     const resume =
       options.bootstrap ?? readResume(options.storageKey, options.environment?.storage);
-    sendEnvelope<TMessage>(socket, {
+    sendEnvelope<TInput>(socket, {
       type: "connect",
       route: options.route,
       params: options.params,
       resume: resume
         ? {
-            sessionId: resume.sessionId,
+            viewId: resume.viewId,
             cursor: resume.cursor,
           }
         : undefined,
@@ -91,8 +91,8 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
     persistCursor(options.storageKey, envelope, options.environment?.storage);
 
     if (envelope.type === "connected") {
-      sessionId = envelope.sessionId;
-      options.handlers.onSession(envelope.sessionId, envelope.resumed, envelope.resume);
+      viewId = envelope.viewId;
+      options.handlers.onView(envelope.viewId, envelope.resumed, envelope.resume);
       return;
     }
 
@@ -120,16 +120,16 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
   });
 
   return {
-    send(message) {
-      if (!sessionId) {
+    send(input) {
+      if (!viewId) {
         options.handlers.onError({
           type: "error",
-          message: "Cannot send before session is connected",
+          message: "Cannot send before view is connected",
         });
         return;
       }
 
-      sendEnvelope(socket, { type: "message", sessionId, message });
+      sendEnvelope(socket, { type: "input", viewId, input });
     },
     close() {
       socket.close();
@@ -137,10 +137,7 @@ export function connectProgramStream<TMessage, TProjection, TTrace>(
   };
 }
 
-function sendEnvelope<TMessage>(
-  socket: ProgramStreamSocket,
-  envelope: ClientEnvelope<TMessage>,
-): void {
+function sendEnvelope<TInput>(socket: ProgramStreamSocket, envelope: ClientEnvelope<TInput>): void {
   socket.send(JSON.stringify(envelope));
 }
 
@@ -165,7 +162,7 @@ function readResume(
 
   try {
     const parsed = JSON.parse(value) as ResumeState;
-    return typeof parsed.sessionId === "string" && typeof parsed.cursor === "string"
+    return typeof parsed.viewId === "string" && typeof parsed.cursor === "string"
       ? parsed
       : undefined;
   } catch {
@@ -178,14 +175,14 @@ function persistCursor<TProjection, TTrace>(
   envelope: ServerEnvelope<TProjection, TTrace>,
   storage: ProgramStreamStorage = window.sessionStorage,
 ): void {
-  if (!storageKey || !("cursor" in envelope) || !envelope.sessionId) {
+  if (!storageKey || !("cursor" in envelope) || !envelope.viewId) {
     return;
   }
 
   storage.setItem(
     storageKey,
     JSON.stringify({
-      sessionId: envelope.sessionId,
+      viewId: envelope.viewId,
       cursor: envelope.cursor,
     }),
   );

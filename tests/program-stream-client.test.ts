@@ -6,7 +6,7 @@ import {
 } from "../src/adapters/react/program-stream";
 import type { ProjectionPatchEnvelope, ResumeResult } from "../src/framework";
 
-type TestMessage = { type: "session.toggle" };
+type TestMessage = { type: "view.toggle" };
 type TestProjection = { count: number };
 type TestTrace = { traceId: string };
 
@@ -15,13 +15,13 @@ describe("program stream client", () => {
     const socket = new FakeSocket();
     const storage = new MemoryStorage({
       "stream-state": JSON.stringify({
-        sessionId: "session-old",
+        viewId: "view-old",
         cursor: "cursor-old",
       }),
     });
     const states: ConnectionState[] = [];
     const patches: ProjectionPatchEnvelope[] = [];
-    const sessions: { sessionId: string; resume: ResumeResult }[] = [];
+    const views: { viewId: string; resume: ResumeResult }[] = [];
 
     const client = connectProgramStream<TestMessage, TestProjection, TestTrace>({
       route: "/contract",
@@ -34,8 +34,8 @@ describe("program stream client", () => {
       },
       handlers: {
         onConnectionState: (state) => states.push(state),
-        onSession: (sessionId, _resumed, resume) => {
-          sessions.push({ sessionId, resume });
+        onView: (viewId, _resumed, resume) => {
+          views.push({ viewId, resume });
         },
         onProjection: () => undefined,
         onPatch: (patch) => patches.push(patch),
@@ -54,7 +54,7 @@ describe("program stream client", () => {
         route: "/contract",
         params: { id: "main" },
         resume: {
-          sessionId: "session-old",
+          viewId: "view-old",
           cursor: "cursor-old",
         },
       }),
@@ -62,14 +62,14 @@ describe("program stream client", () => {
 
     socket.emit({
       type: "connected",
-      sessionId: "session-new",
+      viewId: "view-new",
       cursor: "cursor-1",
       resumed: true,
       resume: { status: "refreshed", reason: "stale-cursor" },
     });
     socket.emit({
       type: "projection:patch",
-      sessionId: "session-new",
+      viewId: "view-new",
       cursor: "cursor-2",
       projectionVersion: 2,
       patch: {
@@ -78,24 +78,24 @@ describe("program stream client", () => {
       },
     });
 
-    client.send({ type: "session.toggle" });
+    client.send({ type: "view.toggle" });
 
-    expect(sessions.at(-1)).toEqual({
-      sessionId: "session-new",
+    expect(views.at(-1)).toEqual({
+      viewId: "view-new",
       resume: { status: "refreshed", reason: "stale-cursor" },
     });
     expect(patches).toHaveLength(1);
     expect(storage.getItem("stream-state")).toEqual(
       JSON.stringify({
-        sessionId: "session-new",
+        viewId: "view-new",
         cursor: "cursor-2",
       }),
     );
     expect(socket.sent.at(-1)).toEqual(
       JSON.stringify({
-        type: "message",
-        sessionId: "session-new",
-        message: { type: "session.toggle" },
+        type: "input",
+        viewId: "view-new",
+        input: { type: "view.toggle" },
       }),
     );
   });
@@ -104,7 +104,7 @@ describe("program stream client", () => {
     const socket = new FakeSocket();
     const storage = new MemoryStorage({
       "stream-state": JSON.stringify({
-        sessionId: "session-old",
+        viewId: "view-old",
         cursor: "cursor-old",
       }),
     });
@@ -114,7 +114,7 @@ describe("program stream client", () => {
       params: { id: "main" },
       storageKey: "stream-state",
       bootstrap: {
-        sessionId: "session-boot",
+        viewId: "view-boot",
         cursor: "cursor-boot",
         resumed: false,
         resume: { status: "fresh" },
@@ -129,7 +129,7 @@ describe("program stream client", () => {
       },
       handlers: {
         onConnectionState: () => undefined,
-        onSession: () => undefined,
+        onView: () => undefined,
         onProjection: () => undefined,
         onPatch: () => undefined,
         onTrace: () => undefined,
@@ -146,7 +146,7 @@ describe("program stream client", () => {
         route: "/contract",
         params: { id: "main" },
         resume: {
-          sessionId: "session-boot",
+          viewId: "view-boot",
           cursor: "cursor-boot",
         },
       }),

@@ -67,12 +67,9 @@ export type ApprovalUIEvent =
   | { type: "ui.deployment.select"; deploymentId: string }
   | { type: "ui.trace.toggle" };
 
-export type ApprovalSessionState = ApprovalUIState;
-export type ApprovalSessionMessage = ApprovalUIEvent;
-
-export type ApprovalActionMessage = {
+export type ApprovalActionInput = {
   type: "action.approveDeployment";
   deploymentId: string;
 };
 
-export type ApprovalClientMessage = ApprovalUIEvent | ApprovalActionMessage;
+export type ApprovalClientInput = ApprovalUIEvent | ApprovalActionInput;

@@ -5,20 +5,20 @@ export type StatelessProgramFactory<
   R,
   TUIState,
   TUIEvent extends { type: string },
-  TActionMessage extends { type: string },
+  TActionInput extends { type: string },
   TProjection,
-> = () => Program<R, TUIState, TUIEvent, TActionMessage, TProjection>;
+> = () => Program<R, TUIState, TUIEvent, TActionInput, TProjection>;
 
 export function createStatelessRuntime<
   R,
   TUIState,
   TUIEvent extends { type: string },
-  TActionMessage extends { type: string },
+  TActionInput extends { type: string },
   TProjection,
 >(
-  createProgram: StatelessProgramFactory<R, TUIState, TUIEvent, TActionMessage, TProjection>,
+  createProgram: StatelessProgramFactory<R, TUIState, TUIEvent, TActionInput, TProjection>,
   options?: RuntimeOptions<TUIState, TProjection>,
-): Runtime<TUIEvent, TActionMessage, TProjection> {
+): Runtime<TUIEvent, TActionInput, TProjection> {
   return {
     get traces() {
       return createRuntime(createProgram(), options).traces;

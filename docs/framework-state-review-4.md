@@ -6,7 +6,7 @@ This report audits the framework after Stage 6 and sets the Stage 7 direction. I
 decision review, not an implementation patch.
 
 Review 3 asked whether the implementation was honest enough to become a framework kernel.
-Stage 6 answered much of that: Effect is now native, schemas/routes/actions/sessions are backed by
+Stage 6 answered much of that: Effect is now native, schemas/routes/actions/views are backed by
 builders, plugins exist, stores expose capabilities, host/renderer/demo boundaries are cleaner,
 and React adapter state is grouped.
 
@@ -62,7 +62,7 @@ The core loop works:
 ```txt
 browser envelope
 -> runtime
--> action or session update
+-> action or view update
 -> Effect work
 -> resource invalidation
 -> projection recompute
@@ -73,8 +73,8 @@ browser envelope
 
 But the public mental model is now under pressure in three places:
 
-- There are too many state-like concepts: resources, session state, runtime store snapshots,
-  live-session registry, stream cursor state, trace state, and React local state.
+- There are too many state-like concepts: resources, view state, runtime store snapshots,
+  live-view registry, stream cursor state, trace state, and React local state.
 - The runtime still centers an in-process object model even though the project wants a
   stateless/serverless story.
 - "Message" is too broad as public vocabulary, while "Action" is too narrow for everything that
@@ -85,7 +85,7 @@ Stage 7 should make these decisions:
 ```txt
 Domain state + UI state
 not
-resources + sessions + local state + runtime snapshots + maybe client state
+resources + views + local state + runtime snapshots + maybe client state
 ```
 
 ```txt
@@ -125,31 +125,31 @@ Remaining problem: resources are still mostly loader-plus-cache definitions. Tha
 for now. The bigger issue is not resource power; it is that non-domain state is not modeled with
 the same conceptual care.
 
-### Session State
+### view State
 
 Current evidence:
 
-- `SessionDefinition` defines `init`, `accepts`, and `update`.
-- Approval session state stores `selectedDeploymentId` and `tracePanelOpen`.
-- `SessionSnapshot` persists route, params, state, projection version, cursor, and observed
+- `viewDefinition` defines `init`, `accepts`, and `update`.
+- Approval view state stores `selectedDeploymentId` and `tracePanelOpen`.
+- `ViewCheckpoint` persists route, params, state, projection version, cursor, and observed
   regions.
-- `LiveSessionRegistry` owns process-local active sessions.
+- `LiveViewRegistry` owns process-local active views.
 
 Grade: **useful implementation scaffold, wrong public center**.
 
-Session state was the correct early prototype move. It proved per-tab conversation state and
+view state was the correct early prototype move. It proved per-tab conversation state and
 resume. But it now carries at least three responsibilities:
 
 - UI state, such as selected deployment and trace panel openness.
 - View/runtime context, such as route, params, projection version, cursor, and observations.
-- Live process attachment, through `LiveSessionRegistry` and host socket delivery.
+- Live process attachment, through `LiveViewRegistry` and host socket delivery.
 
-Those are not the same concept. Keeping them under "session" makes the framework look like it has
+Those are not the same concept. Keeping them under "view" makes the framework look like it has
 three state tiers:
 
 ```txt
 resources
-+ sessions
++ views
 + client/local state
 ```
 
@@ -160,7 +160,7 @@ That is exactly the confusion Stage 7 should remove.
 Current evidence:
 
 - The approval app keeps `deploymentFilter` in React `useState`.
-- That filter is not a resource, not session state, not persisted, and not traced.
+- That filter is not a resource, not view state, not persisted, and not traced.
 
 Grade: **correct behavior, unofficial model**.
 
@@ -176,7 +176,7 @@ placement rules.
 
 Current evidence:
 
-- `RuntimeStore` persists session snapshots and stream envelopes.
+- `RuntimeStore` persists view snapshots and stream envelopes.
 - Memory and JSON stores expose capability metadata.
 - Stores do not own domain data; approval services still own deployment/audit truth.
 
@@ -186,7 +186,7 @@ Runtime store state is framework recovery state. It should not be treated as a t
 state tier. Its job is to checkpoint view context, UI resume state, stream cursors, observations,
 and envelope history.
 
-Stage 7 should rename and shape store contracts around those responsibilities. "Session snapshot"
+Stage 7 should rename and shape store contracts around those responsibilities. "view snapshot"
 should become more explicit:
 
 ```txt
@@ -198,18 +198,18 @@ view checkpoint
   protocol/schema versions
 ```
 
-### Live Session Registry
+### Live view Registry
 
 Current evidence:
 
-- `LiveSessionRegistry` is a process-local `Map`.
-- Runtime `connect` creates or restores an active session in memory.
+- `LiveViewRegistry` is a process-local `Map`.
+- Runtime `connect` creates or restores an active view in memory.
 - Bun host owns socket delivery maps separately.
 
 Grade: **valid live-host optimization, not serverless foundation**.
 
 This is the main serverless conflict. The current runtime can restore from a store, but the primary
-execution shape is still "create runtime, keep registry, process messages against live session
+execution shape is still "create runtime, keep registry, process messages against live view
 objects."
 
 That is fine for the Bun adapter. It cannot remain the primary kernel model if serverless is the
@@ -221,7 +221,7 @@ Current evidence:
 
 - `TraceStore` is in-memory.
 - Browser/dev visibility exists.
-- Traces are scoped to sessions and emitted through stream envelopes.
+- Traces are scoped to views and emitted through stream envelopes.
 
 Grade: **useful causal layer, not state tier**.
 
@@ -245,10 +245,10 @@ Domain state
 UI state
 ```
 
-`Session` should stop being presented as a state tier. It becomes a runtime/view carrier used by
+`view` should stop being presented as a state tier. It becomes a runtime/view carrier used by
 hosts and stores.
 
-### Why Not Keep Server Session As The UI State Model?
+### Why Not Keep Server view As The UI State Model?
 
 The current model is attractive because it preserves the beautiful early thesis:
 
@@ -256,7 +256,7 @@ The current model is attractive because it preserves the beautiful early thesis:
 browser event -> server program -> projection -> trace
 ```
 
-If every selected row, dropdown, draft, and panel flag lives in a server session, the server can
+If every selected row, dropdown, draft, and panel flag lives in a server view, the server can
 explain everything.
 
 But this breaks down as the default model:
@@ -460,7 +460,7 @@ The current runtime is shaped like this:
 ```txt
 createRuntime(program)
 -> keep ResourceGraph cache
--> keep LiveSessionRegistry
+-> keep LiveViewRegistry
 -> keep TraceStore
 -> receive messages over time
 ```
@@ -491,7 +491,7 @@ Serverless cannot be treated as a later adapter detail because it changes the mo
 - Live sockets are host/coordinator concerns, not kernel state.
 - Resource caches are per-invocation optimizations unless backed by an adapter.
 
-If Stage 7 keeps live server sessions as the conceptual center, every later serverless adapter will
+If Stage 7 keeps live server views as the conceptual center, every later serverless adapter will
 be forced to emulate a long-lived server process. That is the wrong direction for this project.
 
 ### What Stays Store-Agnostic
@@ -549,25 +549,25 @@ Bun socket message
 -> build invocation input
 -> call ProgramRuntime.invoke(...)
 -> persist returned writes
--> deliver returned envelopes by session/view id
+-> deliver returned envelopes by view/view id
 ```
 
-`LiveSessionRegistry` can still exist as a live-host cache or compatibility layer. It should not be
+`LiveViewRegistry` can still exist as a live-host cache or compatibility layer. It should not be
 the required runtime truth.
 
 ## Input Vocabulary Decision
 
-The current stream has a generic client envelope:
+The stream now has a generic client input envelope:
 
 ```txt
-{ type: "message", sessionId, message: { type: string, ... } }
+{ type: "input", viewId, input: { type: string, ... } }
 ```
 
 The runtime then checks:
 
 ```txt
 is this an action type?
-else is this accepted by session?
+else is this accepted by view?
 else reject
 ```
 
@@ -614,8 +614,8 @@ This vocabulary may be useful internally later, but it should not be the first p
 
 ### Decision: Program Inputs With Typed Subtypes
 
-Stage 7 should use "program input" as the conceptual umbrella and keep "message" as transport
-language.
+Stage 7 should use "program input" as the conceptual umbrella all the way through the public
+transport boundary.
 
 Public subtypes:
 
@@ -636,10 +636,10 @@ This is not naming for its own sake. The subtype controls:
 - adapter dispatch
 - developer guidance
 
-The stream can still carry a message envelope:
+The stream carries a typed input envelope:
 
 ```txt
-ClientEnvelope.message
+ClientEnvelope.input
 ```
 
 But app authors should think in program inputs:
@@ -657,7 +657,7 @@ model behind compatibility and then migrate the approval demo.
 
 ### View Context
 
-Introduce a view-level runtime concept that replaces session as the public mental model:
+Introduce a view-level runtime concept that replaces view as the public mental model:
 
 ```txt
 ViewContext
@@ -669,7 +669,7 @@ ViewContext
   observed regions/resources
 ```
 
-This is what the runtime restores and checkpoints. It can be implemented using today's session
+This is what the runtime restores and checkpoints. It can be implemented using today's view
 snapshot machinery at first.
 
 ### UI State Definition
@@ -693,7 +693,7 @@ const approvalUi = UIState.define("approval.ui")
   }));
 ```
 
-This should replace the public role currently played by `Session.define`.
+This replaces the public role previously played by `view.define`.
 
 ### Screen Projection
 
@@ -703,7 +703,7 @@ Projection should receive UI state explicitly:
 project({ params, ui }, context);
 ```
 
-instead of receiving a broad session object whose fields mix route params, runtime cursor, observed
+instead of receiving a broad view object whose fields mix route params, runtime cursor, observed
 regions, and UI state.
 
 The projection model becomes:
@@ -772,10 +772,9 @@ future diffs are meaningful.
 
 Link this review from the design index and treat it as the Stage 7 planning source.
 
-### 3. Introduce UI State And UI Events Behind Compatibility
+### 3. Introduce UI State And UI Events
 
-Add UI state definitions and UI event dispatch while keeping `Session.define` as a compatibility
-surface.
+Add UI state definitions and UI event dispatch as the only public UI-state definition path.
 
 Acceptance target:
 
@@ -783,9 +782,9 @@ Acceptance target:
 - domain approval remains an action
 - local filter remains ordinary React local UI state
 
-### 4. Split Session Into View Context Pieces
+### 4. Split View Into View Context Pieces
 
-Refactor current session responsibilities into explicit roles:
+Refactor current view responsibilities into explicit roles:
 
 - view identity
 - route and params
@@ -794,7 +793,8 @@ Refactor current session responsibilities into explicit roles:
 - observed regions/resources
 - live delivery attachment
 
-Keep storage compatibility if practical, but update names and tests around the new model.
+Update storage, stream, hooks, and tests around the new model instead of preserving old session
+compatibility.
 
 ### 5. Add Stateless Invocation Core
 
@@ -818,11 +818,11 @@ This does not need to be perfectly pure internally. It does need to make process
 
 Keep the existing demo working through Bun, but make the host call the stateless invocation path.
 
-`LiveSessionRegistry` should become optional live-host acceleration, not the source of truth.
+`LiveViewRegistry` should become optional live-host acceleration, not the source of truth.
 
 ### 7. Extend Store Contracts For View Checkpoints And Observation Indexes
 
-Runtime stores should evolve from session/envelope persistence toward:
+Runtime stores should evolve from view/envelope persistence toward:
 
 - view checkpoints
 - UI checkpoint schemas
@@ -897,26 +897,26 @@ README and design docs should explain:
 - Region-value patches update visible projection state.
 - Unpatchable regions fall back to full projection updates.
 - Resume statuses remain explicit.
-- Host delivery can route envelopes to connected sessions/views.
+- Host delivery can route envelopes to connected views/views.
 - Browser/dev trace visibility remains safe.
 
 ## Updated Contract Map
 
-| Framework promise       | Current state                                         | Stage 7 decision                                     |
-| ----------------------- | ----------------------------------------------------- | ---------------------------------------------------- |
-| Durable workflow truth  | Resources and actions                                 | Keep as Domain state                                 |
-| UI/conversational state | Session state plus React local state                  | Make UI state a first-class tier                     |
-| Session                 | State, route, cursor, observations, live object       | Reframe as ViewContext/runtime carrier               |
-| Client local state      | Exists unofficially                                   | Officially valid for local-only UI                   |
-| Serverless              | Resume works, runtime still process-centered          | Stateless invocation becomes kernel contract         |
-| Runtime store           | Session snapshots and envelope log                    | View checkpoints, envelopes, observations, retention |
-| Live delivery           | Bun socket registry                                   | Host/coordinator responsibility                      |
-| Message                 | Transport and public concept are blurred              | Message is transport; program inputs are typed       |
-| Action                  | Domain transaction but competes with session messages | Keep only for domain mutation intent                 |
-| UI event                | Currently session message                             | First-class input subtype                            |
-| Resource event          | `runtime.invalidate()`                                | First-class external invalidation lane               |
-| System event            | Connect/resume envelopes                              | Runtime input subtype                                |
-| Trace                   | Strong for actions, mixed for session updates         | Distinguish UI/action/resource/system causality      |
+| Framework promise       | Current state                                   | Stage 7 decision                                     |
+| ----------------------- | ----------------------------------------------- | ---------------------------------------------------- |
+| Durable workflow truth  | Resources and actions                           | Keep as Domain state                                 |
+| UI/conversational state | view state plus React local state               | Make UI state a first-class tier                     |
+| view                    | State, route, cursor, observations, live object | Reframe as ViewContext/runtime carrier               |
+| Client local state      | Exists unofficially                             | Officially valid for local-only UI                   |
+| Serverless              | Resume works, runtime still process-centered    | Stateless invocation becomes kernel contract         |
+| Runtime store           | view snapshots and envelope log                 | View checkpoints, envelopes, observations, retention |
+| Live delivery           | Bun socket registry                             | Host/coordinator responsibility                      |
+| Message                 | Transport and public concept are blurred        | Message is transport; program inputs are typed       |
+| Action                  | Domain transaction but competes with UI events  | Keep only for domain mutation intent                 |
+| UI event                | Currently view message                          | First-class input subtype                            |
+| Resource event          | `runtime.invalidate()`                          | First-class external invalidation lane               |
+| System event            | Connect/resume envelopes                        | Runtime input subtype                                |
+| Trace                   | Strong for actions, mixed for view updates      | Distinguish UI/action/resource/system causality      |
 
 ## Bottom Line
 
@@ -936,7 +936,7 @@ Hosts and stores provide deployment-specific durability and delivery.
 ```
 
 That preserves the original thesis without forcing every transient interaction through a server
-session:
+view:
 
 ```txt
 Build webapps as durable server programs,
