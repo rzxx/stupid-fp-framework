@@ -628,12 +628,24 @@ describe("framework contract", () => {
       ephemeral: true,
       singleProcess: true,
       supportsRangeRead: true,
+      supportsObservationIndex: true,
     } satisfies Partial<RuntimeStoreCapabilities>);
     expect(file.capabilities).toMatchObject({
       ephemeral: false,
       singleProcess: true,
       supportsRangeRead: true,
+      supportsObservationIndex: true,
     } satisfies Partial<RuntimeStoreCapabilities>);
+  });
+
+  test("runtime stores list view checkpoints for stateless observation recovery", async () => {
+    const memory = new MemoryRuntimeStore<SessionState, Projection>();
+    const file = new JsonFileRuntimeStore<SessionState, Projection>(
+      join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
+    );
+
+    await assertStoreListsSessions(memory);
+    await assertStoreListsSessions(file);
   });
 
   test("JSON file store reports corrupted state as a typed store failure", async () => {
@@ -804,6 +816,51 @@ describe("framework contract", () => {
         }),
       ]),
     );
+  });
+
+  test("stateless action invalidation uses stored observations to fan out patches", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const runtime = createStatelessRuntime(() => createCounterProgram(services), { store });
+    const first = await connect(runtime);
+    const second = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "message",
+      sessionId: first.sessionId,
+      message: { type: "action.increment", amount: 3 },
+    });
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+
+    expect(patches.map((patch) => patch.sessionId).sort()).toEqual(
+      [first.sessionId, second.sessionId].sort(),
+    );
+    expect(patches.map((patch) => applyCounterPatch(first.projection, patch).count)).toEqual([
+      3, 3,
+    ]);
+  });
+
+  test("stateless resource events refresh checkpointed affected views", async () => {
+    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const services = createServices();
+    const runtime = createStatelessRuntime(() => createCounterProgram(services), { store });
+    const first = await connect(runtime);
+    const second = await connect(runtime);
+
+    services.counter.value = 9;
+    const result = await runtime.invalidate([counterKey]);
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+
+    expect(patches.map((patch) => patch.sessionId).sort()).toEqual(
+      [first.sessionId, second.sessionId].sort(),
+    );
+    expect(patches.map((patch) => applyCounterPatch(first.projection, patch).count)).toEqual([
+      9, 9,
+    ]);
   });
 
   test("stream parser rejects params that are not string records", () => {
@@ -1178,6 +1235,22 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Proj
       cursor: secondCursor,
       envelope: { type: "projection:update" },
     },
+  ]);
+}
+
+async function assertStoreListsSessions(store: RuntimeStore<SessionState, Projection>) {
+  const registry = new LiveSessionRegistry(counterSession);
+  const view = registry.create("/contract/:id", { id: "main" });
+  registry.update(view, { type: "session.toggle" });
+
+  await store.saveSession(registry.snapshot(view));
+
+  expect(await store.listSessions()).toEqual([
+    expect.objectContaining({
+      sessionId: "session-1",
+      viewId: "view-1",
+      ui: { selected: true },
+    }),
   ]);
 }
 

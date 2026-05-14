@@ -205,6 +205,7 @@ export function createRuntime<
       return affectedRegions(sessions.list(), keys);
     },
     async invalidate(keys) {
+      await restoreCheckpointedSessions();
       return refreshAffectedSessions(keys);
     },
 
@@ -214,6 +215,7 @@ export function createRuntime<
         route: envelope.route,
         params: envelope.params,
       };
+      await restoreCheckpointedSessions();
       const resume = envelope.resume
         ? await resolveResume(connectRoute.route, connectRoute.params, envelope.resume)
         : null;
@@ -427,6 +429,7 @@ export function createRuntime<
     keys: readonly ResourceKey[],
     trace?: TraceSnapshot,
   ): Promise<RuntimeResult<TProjection>> {
+    await restoreCheckpointedSessions();
     const affected = affectedRegions(sessions.list(), keys);
 
     program.resourceGraph.invalidate(keys);
@@ -575,6 +578,16 @@ export function createRuntime<
     const session = sessions.restore(snapshot);
     await runSessionHooks("restore", session);
     return session;
+  }
+
+  async function restoreCheckpointedSessions(): Promise<void> {
+    const snapshots = await runStore(() => store.listSessions());
+
+    for (const snapshot of snapshots) {
+      if (!sessions.get(snapshot.sessionId)) {
+        sessions.restore(snapshot);
+      }
+    }
   }
 
   function resolveScreen(route: string) {

@@ -12,6 +12,7 @@ export type RuntimeStoreCapabilities = {
   supportsRangeRead: boolean;
   supportsCompaction: boolean;
   supportsPubSub: boolean;
+  supportsObservationIndex: boolean;
   retention: "unbounded" | "adapter-defined";
 };
 
@@ -52,6 +53,7 @@ export type RuntimeStore<TSessionState, TProjection, TTrace = TraceSnapshot> = {
   capabilities: RuntimeStoreCapabilities;
   saveSession: (snapshot: SessionSnapshot<TSessionState>) => Promise<void>;
   loadSession: (sessionId: string) => Promise<SessionSnapshot<TSessionState> | null>;
+  listSessions: () => Promise<SessionSnapshot<TSessionState>[]>;
   nextCursor: () => Promise<string>;
   appendEnvelope: (
     sessionId: string,
@@ -83,6 +85,7 @@ export class MemoryRuntimeStore<
     supportsRangeRead: true,
     supportsCompaction: false,
     supportsPubSub: false,
+    supportsObservationIndex: true,
     retention: "unbounded",
   };
 
@@ -96,6 +99,10 @@ export class MemoryRuntimeStore<
 
   async loadSession(sessionId: string): Promise<SessionSnapshot<TSessionState> | null> {
     return this.#sessions.get(sessionId) ?? null;
+  }
+
+  async listSessions(): Promise<SessionSnapshot<TSessionState>[]> {
+    return [...this.#sessions.values()].map((session) => ({ ...session }));
   }
 
   async nextCursor(): Promise<string> {
@@ -147,6 +154,7 @@ export class JsonFileRuntimeStore<
     supportsRangeRead: true,
     supportsCompaction: false,
     supportsPubSub: false,
+    supportsObservationIndex: true,
     retention: "adapter-defined",
   };
 
@@ -166,6 +174,11 @@ export class JsonFileRuntimeStore<
   async loadSession(sessionId: string): Promise<SessionSnapshot<TSessionState> | null> {
     const state = await this.#read();
     return state.sessions.find((session) => session.sessionId === sessionId) ?? null;
+  }
+
+  async listSessions(): Promise<SessionSnapshot<TSessionState>[]> {
+    const state = await this.#read();
+    return state.sessions;
   }
 
   async nextCursor(): Promise<string> {
