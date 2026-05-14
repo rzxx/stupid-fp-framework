@@ -13,7 +13,6 @@ import {
   Effect,
   JsonFileRuntimeStore,
   Layer,
-  LiveViewRegistry,
   MemoryRuntimeStore,
   parseClientEnvelope,
   ResourceGraph,
@@ -31,6 +30,7 @@ import {
   type TraceEnvelope,
   type TraceSnapshot,
   TraceStore,
+  type ViewCheckpoint,
 } from "../src/framework";
 
 type Services = {
@@ -250,21 +250,6 @@ describe("framework contract", () => {
     expect(trace.events.map((event) => event.label)).toContain("region patch streamed");
   });
 
-  test("view context exposes UI checkpoint state separately from live view compatibility", () => {
-    const registry = new LiveViewRegistry(counterUIState);
-    const view = registry.create("/contract/:id", { id: "main" });
-
-    registry.update(view, { type: "view.toggle" });
-    const snapshot = registry.checkpoint(view);
-
-    expect(view.viewId).toBeString();
-    expect(view.ui).toEqual({ selected: true });
-    expect(snapshot).toMatchObject({
-      viewId: "view-1",
-      ui: { selected: true },
-    });
-  });
-
   test("unknown inputs are rejected instead of being treated as view updates", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
@@ -411,7 +396,7 @@ describe("framework contract", () => {
     });
 
     expect(observed).toContain("route:/contract/:id");
-    expect(observed).toContain("view:create:view-1");
+    expect(observed.some((entry) => entry.startsWith("view:create:"))).toBe(true);
     expect(observed).toContain("view:update:view.toggle");
     expect(observed).toContain("action:before:action.increment");
     expect(observed).toContain("action:after:action.increment:true");
@@ -1215,15 +1200,22 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<UIState, Projectio
 }
 
 async function assertStoreListsViews(store: RuntimeStore<UIState, Projection>) {
-  const registry = new LiveViewRegistry(counterUIState);
-  const view = registry.create("/contract/:id", { id: "main" });
-  registry.update(view, { type: "view.toggle" });
+  const checkpoint: ViewCheckpoint<UIState> = {
+    checkpointVersion: 1,
+    viewId: "view-for-store-contract",
+    route: "/contract/:id",
+    params: { id: "main" },
+    ui: { selected: true },
+    projectionVersion: 1,
+    cursor: "cursor-for-store-contract",
+    observedRegions: [],
+  };
 
-  await store.saveView(registry.checkpoint(view));
+  await store.saveView(checkpoint);
 
   expect(await store.listViews()).toEqual([
     expect.objectContaining({
-      viewId: "view-1",
+      viewId: checkpoint.viewId,
       ui: { selected: true },
     }),
   ]);
