@@ -995,6 +995,26 @@ describe("framework contract", () => {
     );
   });
 
+  test("stateless runtime exposes traces without invoking the program factory", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    let createdPrograms = 0;
+    const runtime = createStatelessRuntime(
+      () => {
+        createdPrograms += 1;
+        return createCounterProgram(services);
+      },
+      { store },
+    );
+
+    expect(runtime.traces.list()).toEqual([]);
+    expect(createdPrograms).toBe(0);
+
+    await connect(runtime);
+
+    expect(createdPrograms).toBe(1);
+  });
+
   test("stateless action invalidation uses stored observations to fan out patches", async () => {
     const store = new MemoryRuntimeStore<UIState, Projection>();
     const services = createServices();

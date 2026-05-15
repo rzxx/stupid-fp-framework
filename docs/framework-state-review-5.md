@@ -55,15 +55,16 @@ Sources reviewed:
 This review did not add runtime behavior. It records the next direction based on existing code and
 the Stage 7 verification record.
 
-Current evidence:
+Baseline evidence at the start of Review 5:
 
 - `docs/stage-7-record.md` says `bun test` passed 46 tests and `bun run check` passed at Stage 7
   completion.
 - `createStatelessRuntime` in `src/framework/stateless-runtime.ts` creates a fresh runtime for
   each `connect`, `receive`, `affectedRegions`, and `invalidate` call.
-- The `traces` getter on `createStatelessRuntime` also creates a fresh runtime, which means trace
-  state is not a stable stateless service and the API shape still leaks process-oriented runtime
-  thinking.
+- The original `traces` getter on `createStatelessRuntime` also created a fresh runtime, which meant
+  trace state was not a stable stateless service and the API shape still leaked process-oriented
+  runtime thinking. Stage 8 should remove that getter side effect rather than treating it as a
+  documentation-only concern.
 - `createRuntime` still constructs `LiveViewRegistry` and `TraceStore` in process memory, then
   uses the runtime store to restore checkpoints when needed.
 - `RuntimeStore` has `listViews()` and a `supportsObservationIndex` capability flag, but no

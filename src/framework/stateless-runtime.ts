@@ -1,5 +1,6 @@
 import { createRuntime, type Runtime, type RuntimeOptions } from "./runtime";
 import type { Program } from "./program";
+import { TraceStore } from "./trace";
 
 export type StatelessProgramFactory<
   R,
@@ -19,21 +20,24 @@ export function createStatelessRuntime<
   createProgram: StatelessProgramFactory<R, TUIState, TUIEvent, TActionInput, TProjection>,
   options?: RuntimeOptions<TUIState, TProjection>,
 ): Runtime<TUIEvent, TActionInput, TProjection> {
+  const traces = options?.traces ?? new TraceStore();
+  const invocationOptions = { ...options, traces };
+
   return {
     get traces() {
-      return createRuntime(createProgram(), options).traces;
+      return traces;
     },
     connect(envelope) {
-      return createRuntime(createProgram(), options).connect(envelope);
+      return createRuntime(createProgram(), invocationOptions).connect(envelope);
     },
     receive(envelope) {
-      return createRuntime(createProgram(), options).receive(envelope);
+      return createRuntime(createProgram(), invocationOptions).receive(envelope);
     },
     affectedRegions(keys) {
-      return createRuntime(createProgram(), options).affectedRegions(keys);
+      return createRuntime(createProgram(), invocationOptions).affectedRegions(keys);
     },
     invalidate(keys) {
-      return createRuntime(createProgram(), options).invalidate(keys);
+      return createRuntime(createProgram(), invocationOptions).invalidate(keys);
     },
   };
 }

@@ -10,6 +10,8 @@ browser streams, invocation context, projection patch manifests, and a richer de
 
 - Added invocation context as an Effect service so actions, resources, projections, and plugins can
   receive request identity, client input IDs, and fanout scope without process-global state.
+- Made the stateless runtime trace reader stable by removing the `traces` getter's runtime
+  construction side effect.
 - Added runtime protocol events and delivery intents beside stream envelopes so the kernel has a
   transport-neutral result surface.
 - Added `RuntimeStore.commitInvocation()` with cursor assignment, checkpoint writes, observation

@@ -56,6 +56,7 @@ export type Runtime<
 
 export type RuntimeOptions<TUIState, TProjection> = {
   store?: RuntimeStore<TUIState, TProjection, TraceSnapshot>;
+  traces?: TraceStore;
   fanoutScope?: (route: string, params: Record<string, string>) => string;
   invocationContext?: (
     input:
@@ -76,7 +77,7 @@ export function createRuntime<
   options?: RuntimeOptions<TUIState, TProjection>,
 ): Runtime<TUIEvent, TActionInput, TProjection> {
   const views = new LiveViewRegistry(program.uiState);
-  const traces = new TraceStore();
+  const traces = options?.traces ?? new TraceStore();
   const actionPluginHooks = actionHooks(program.plugins);
   const resourcePluginHooks = resourceHooks(program.plugins);
   const routePluginHooks = routeHooks(program.plugins);
