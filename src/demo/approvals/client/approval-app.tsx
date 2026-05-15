@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import {
   createProjectionPatchApplier,
   useProgramStream,
-  type ProjectionPatchManifest,
   type ProgramStreamReactOptions,
 } from "../../../adapters/react";
 import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
+import { approvalProjectionPatchManifest } from "../projection-manifest";
 import type { ApprovalClientInput, ApprovalProjection } from "../types";
 
 export function ApprovalApp(props: {
@@ -280,28 +280,3 @@ function formatTime(value: string): string {
     second: "2-digit",
   }).format(new Date(value));
 }
-
-const approvalProjectionPatchManifest: ProjectionPatchManifest<ApprovalProjection> = {
-  projectionVersion: 1,
-  regions: {
-    pendingDeployments: {
-      kind: "replace-at-path",
-      path: ["pendingDeployments"],
-    },
-    selectedDeployment: {
-      kind: "replace-at-path",
-      path: ["selectedDeployment"],
-    },
-    activeRuns: {
-      kind: "replace-at-path",
-      path: ["activeRuns"],
-    },
-    tracePanel: {
-      kind: "replace-fields",
-      fields: [
-        { from: ["open"], to: ["tracePanelOpen"] },
-        { from: ["traces"], to: ["traces"] },
-      ],
-    },
-  },
-};

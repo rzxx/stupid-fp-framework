@@ -15,6 +15,30 @@ export type ProjectionRegionSnapshot = {
   }[];
 };
 
+export type ProjectionPath = readonly (string | number)[];
+
+export type ProjectionRegionPatchStrategy<TProjection> =
+  | {
+      kind: "replace-at-path";
+      path: ProjectionPath;
+    }
+  | {
+      kind: "replace-fields";
+      fields: {
+        from: ProjectionPath;
+        to: ProjectionPath;
+      }[];
+    }
+  | {
+      kind: "custom";
+      apply: (projection: TProjection, value: JsonValue) => TProjection;
+    };
+
+export type ProjectionPatchManifest<TProjection> = {
+  projectionVersion: number;
+  regions: Record<string, ProjectionRegionPatchStrategy<TProjection>>;
+};
+
 export type ProjectionFailure = {
   type: "projection-error";
   message: string;
@@ -31,6 +55,7 @@ export type ProjectionContext<R> = {
 
 export type ScreenDefinition<R, TUIState, TProjection> = {
   route: string | RouteDefinition;
+  patchManifest?: ProjectionPatchManifest<TProjection>;
   project: (
     view: ViewContext<TUIState>,
     context: ProjectionContext<R>,

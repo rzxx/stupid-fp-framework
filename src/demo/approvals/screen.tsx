@@ -7,6 +7,7 @@ import {
 } from "../../framework";
 import { ActiveDeploymentRuns, AuditTrail, Deployment, PendingDeployments } from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
+import { approvalProjectionPatchManifest } from "./projection-manifest";
 import type {
   ApprovalProjection,
   ApprovalUIState,
@@ -26,6 +27,7 @@ export const approvalScreen: ScreenDefinition<
   route: Route.define("/teams/:teamId/deployments", {
     params: Schema.Struct({ teamId: Schema.String }),
   }),
+  patchManifest: approvalProjectionPatchManifest,
   project(view, context) {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;

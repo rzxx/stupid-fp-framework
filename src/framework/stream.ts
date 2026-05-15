@@ -49,6 +49,7 @@ export type ProjectionEnvelope<TProjection> = {
   viewId: string;
   cursor: string;
   projectionVersion: number;
+  projectionManifestVersion?: number;
   projection: TProjection;
   regions: {
     id: string;
@@ -67,6 +68,7 @@ export type ProjectionPatchEnvelope = {
   viewId: string;
   cursor: string;
   projectionVersion: number;
+  projectionManifestVersion?: number;
   patch: {
     kind: "region-values";
     regions: {

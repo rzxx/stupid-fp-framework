@@ -212,6 +212,8 @@ export function createRuntime<
       viewId: computed.view.viewId,
       cursor: "",
       projectionVersion: computed.projectionVersion,
+      projectionManifestVersion: resolveScreen(computed.view.route)?.patchManifest
+        ?.projectionVersion,
       projection: computed.projection,
       regions: computed.regions,
       causedByTraceId: trace?.traceId,
@@ -594,6 +596,8 @@ export function createRuntime<
       viewId: computed.view.viewId,
       cursor: "",
       projectionVersion: computed.projectionVersion,
+      projectionManifestVersion: resolveScreen(computed.view.route)?.patchManifest
+        ?.projectionVersion,
       patch: {
         kind: "region-values",
         regions: patchRegions,

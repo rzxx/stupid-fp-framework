@@ -1,33 +1,23 @@
-import type { JsonValue, ProjectionPatchEnvelope } from "../../framework";
-
-export type ProjectionPath = readonly (string | number)[];
+import type {
+  JsonValue,
+  ProjectionPatchEnvelope,
+  ProjectionPatchManifest,
+  ProjectionPath,
+  ProjectionRegionPatchStrategy,
+} from "../../framework";
 
 export type RegionValuePatchHandlers<TProjection> = Record<
   string,
   (projection: TProjection, value: JsonValue) => TProjection
 >;
 
-export type RegionValuePatchStrategy<TProjection> =
-  | {
-      kind: "replace-at-path";
-      path: ProjectionPath;
-    }
-  | {
-      kind: "replace-fields";
-      fields: {
-        from: ProjectionPath;
-        to: ProjectionPath;
-      }[];
-    }
-  | {
-      kind: "custom";
-      apply: (projection: TProjection, value: JsonValue) => TProjection;
-    };
+export type RegionValuePatchStrategy<TProjection> = ProjectionRegionPatchStrategy<TProjection>;
 
-export type ProjectionPatchManifest<TProjection> = {
-  projectionVersion: number;
-  regions: Record<string, RegionValuePatchStrategy<TProjection>>;
-};
+export type {
+  ProjectionPatchManifest,
+  ProjectionPath,
+  ProjectionRegionPatchStrategy,
+} from "../../framework";
 
 export function applyRegionValuePatch<TProjection>(
   projection: TProjection,
@@ -67,6 +57,15 @@ export function applyRegionValuePatchWithManifest<TProjection>(
 ): TProjection {
   if (envelope.patch.kind !== "region-values") {
     return projection;
+  }
+
+  if (
+    envelope.projectionManifestVersion !== undefined &&
+    envelope.projectionManifestVersion !== manifest.projectionVersion
+  ) {
+    throw new Error(
+      `Projection patch manifest version mismatch: received ${envelope.projectionManifestVersion}, expected ${manifest.projectionVersion}`,
+    );
   }
 
   let next = projection;

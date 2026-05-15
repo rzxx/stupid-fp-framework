@@ -106,4 +106,32 @@ describe("client projection patches", () => {
       traces: [{ traceId: "trace-1" }],
     });
   });
+
+  test("rejects projection patches from incompatible manifest versions", () => {
+    type Projection = { count: number };
+    const applyPatch = createProjectionPatchApplier<Projection>({
+      projectionVersion: 2,
+      regions: {
+        counter: {
+          kind: "replace-at-path",
+          path: ["count"],
+        },
+      },
+    });
+    const patch: ProjectionPatchEnvelope = {
+      type: "projection:patch",
+      viewId: "view-1",
+      cursor: "cursor-2",
+      projectionVersion: 2,
+      projectionManifestVersion: 1,
+      patch: {
+        kind: "region-values",
+        regions: [{ id: "counter", value: 2, resources: [] }],
+      },
+    };
+
+    expect(() => applyPatch({ count: 1 }, patch)).toThrow(
+      "Projection patch manifest version mismatch: received 1, expected 2",
+    );
+  });
 });

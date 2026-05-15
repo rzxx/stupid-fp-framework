@@ -28,6 +28,7 @@ describe("deployment approval workflow", () => {
       ? pendingDeploymentsValue
       : [];
 
+    expect(patch.projectionManifestVersion).toBe(1);
     expect(actionResult).toMatchObject({
       ok: true,
       result: { deploymentId, status: "approved" },
