@@ -1,3 +1,4 @@
+import { watch, type FSWatcher } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -9,6 +10,8 @@ import {
   type ServerEnvelope,
   type TraceEnvelope,
 } from "./stream";
+
+type BunSocketData = { kind: "stream" | "reload" };
 
 export type BunRuntime<TInput, TProjection, TTrace> = {
   connect: (
@@ -27,6 +30,9 @@ export type BunProgramHostOptions<TInput, TProjection, TTrace> = {
   stylesPath?: string;
   outdir?: string;
   port?: number;
+  dev?: {
+    watch?: boolean;
+  };
   initialRender?: {
     resolve: (request: Request) =>
       | {
@@ -40,20 +46,30 @@ export type BunProgramHostOptions<TInput, TProjection, TTrace> = {
 
 export async function serveBunProgram<TInput, TProjection, TTrace>(
   options: BunProgramHostOptions<TInput, TProjection, TTrace>,
-): Promise<Bun.Server<unknown>> {
+): Promise<Bun.Server<BunSocketData>> {
   const outdir = options.outdir ?? join(options.rootDir, "..", "dist");
   const clientOut = join(outdir, "app.js");
   const delivery = new SocketDelivery<TProjection, TTrace>();
+  const reload = new DevReloadDelivery();
 
   await buildClient(options.clientEntry, outdir);
+  const watchers = options.dev?.watch ? watchClient(options, outdir, reload) : [];
 
-  return Bun.serve({
+  const server = Bun.serve<BunSocketData>({
     port: options.port,
     async fetch(request, server) {
       const url = new URL(request.url);
 
       if (url.pathname === "/stream") {
-        if (server.upgrade(request, { data: undefined })) {
+        if (server.upgrade(request, { data: { kind: "stream" as const } })) {
+          return;
+        }
+
+        return new Response("WebSocket upgrade failed", { status: 400 });
+      }
+
+      if (url.pathname === "/__stupid_fp_reload" && options.dev?.watch) {
+        if (server.upgrade(request, { data: { kind: "reload" as const } })) {
           return;
         }
 
@@ -85,16 +101,26 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
           const rendered = await options.initialRender.render(bootstrap);
           const shell = await Bun.file(options.shellPath).text();
 
-          return new Response(injectInitialRender(shell, rendered, bootstrap), {
-            headers: { "Content-Type": "text/html; charset=utf-8" },
-          });
+          return new Response(
+            injectDevReload(injectInitialRender(shell, rendered, bootstrap), options),
+            {
+              headers: { "Content-Type": "text/html; charset=utf-8" },
+            },
+          );
         }
       }
 
-      return htmlFile(options.shellPath);
+      const shell = await Bun.file(options.shellPath).text();
+      return new Response(injectDevReload(shell, options), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
     },
     websocket: {
       async message(socket, payload) {
+        if (socket.data?.kind === "reload") {
+          return;
+        }
+
         const parsed = parseClientEnvelope<TInput>(String(payload));
 
         if (parsed.type === "error") {
@@ -109,11 +135,72 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
 
         delivery.send(socket, result.envelopes);
       },
+      open(socket) {
+        if (socket.data?.kind === "reload") {
+          reload.open(socket);
+        }
+      },
       close(socket) {
+        if (socket.data?.kind === "reload") {
+          reload.close(socket);
+          return;
+        }
+
         delivery.close(socket);
       },
     },
   });
+  const stop = server.stop.bind(server);
+
+  server.stop = ((closeActiveConnections?: boolean) => {
+    for (const watcher of watchers) {
+      watcher.close();
+    }
+
+    stop(closeActiveConnections);
+  }) as typeof server.stop;
+
+  return server;
+}
+
+function injectDevReload(html: string, options: { dev?: { watch?: boolean } }): string {
+  if (!options.dev?.watch || html.includes("__stupid_fp_reload")) {
+    return html;
+  }
+
+  const script = `<script type="module">
+const socket = new WebSocket((location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/__stupid_fp_reload");
+socket.addEventListener("message", () => location.reload());
+</script>`;
+
+  return html.includes("</body>")
+    ? html.replace("</body>", `${script}</body>`)
+    : `${html}${script}`;
+}
+
+function watchClient<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
+  outdir: string,
+  reload: DevReloadDelivery,
+): FSWatcher[] {
+  let pending: unknown = null;
+  const watched = new Set([options.clientEntry, options.stylesPath].filter(isString).map(dirname));
+  const rebuild = () => {
+    if (pending !== null) {
+      clearTimeout(pending as ReturnType<typeof setTimeout>);
+    }
+
+    pending = setTimeout(() => {
+      pending = null;
+      void buildClient(options.clientEntry, outdir).then(() => reload.reload());
+    }, 40);
+  };
+
+  return [...watched].map((path) => watch(path, { recursive: true }, rebuild));
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
 }
 
 function bootstrapFromEnvelopes<TProjection, TTrace>(
@@ -165,12 +252,6 @@ function serializeBootstrap<TProjection, TTrace>(
   return JSON.stringify(bootstrap).replaceAll("<", "\\u003c");
 }
 
-function htmlFile(path: string): Response {
-  return new Response(Bun.file(path), {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-  });
-}
-
 async function buildClient(entrypoint: string, outdir: string): Promise<void> {
   await mkdir(dirname(join(outdir, "app.js")), { recursive: true });
 
@@ -189,6 +270,24 @@ async function buildClient(entrypoint: string, outdir: string): Promise<void> {
     }
 
     throw new Error("Client build failed");
+  }
+}
+
+class DevReloadDelivery {
+  readonly #sockets = new Set<Bun.ServerWebSocket<unknown>>();
+
+  open(socket: Bun.ServerWebSocket<unknown>): void {
+    this.#sockets.add(socket);
+  }
+
+  close(socket: Bun.ServerWebSocket<unknown>): void {
+    this.#sockets.delete(socket);
+  }
+
+  reload(): void {
+    for (const socket of this.#sockets) {
+      socket.send("reload");
+    }
   }
 }
 

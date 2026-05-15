@@ -236,6 +236,44 @@ button {
   gap: 2px;
 }
 
+.run-list {
+  display: grid;
+  gap: 12px;
+}
+
+.run-row {
+  border: 1px solid #dce3e7;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 120px) 44px;
+  padding: 12px;
+}
+
+.run-row strong,
+.run-row small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-row small {
+  color: #61717a;
+  margin-top: 3px;
+}
+
+.run-row meter {
+  align-self: center;
+  width: 100%;
+}
+
+.run-row > span {
+  align-self: center;
+  color: #46545c;
+  font-size: 13px;
+  text-align: right;
+}
+
 .trace-list {
   display: grid;
   gap: 12px;
@@ -313,6 +351,10 @@ button {
   }
 
   .trace-panel {
+    grid-column: 1 / -1;
+  }
+
+  .run-panel {
     grid-column: 1 / -1;
   }
 }

@@ -1,5 +1,6 @@
 import type {
   ActionResultEnvelope,
+  ActionLifecycleEnvelope,
   ErrorEnvelope,
   ProjectionEnvelope,
   ResumeResult,
@@ -15,12 +16,13 @@ export type ApprovalStreamHandlers = {
   onView: (viewId: string, resumed: boolean, resume: ResumeResult) => void;
   onProjection: (envelope: ProjectionEnvelope<ApprovalProjection>) => void;
   onTrace: (envelope: TraceEnvelope<ApprovalProjection["traces"][number]>) => void;
+  onActionLifecycle: (envelope: ActionLifecycleEnvelope) => void;
   onActionResult: (envelope: ActionResultEnvelope) => void;
   onError: (envelope: ErrorEnvelope) => void;
 };
 
 export type ApprovalStreamClient = {
-  send: (input: ApprovalClientInput) => void;
+  send: (input: ApprovalClientInput) => string | undefined;
   close: () => void;
 };
 

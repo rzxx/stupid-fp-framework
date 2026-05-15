@@ -331,6 +331,28 @@ export function createRuntime<
         ]);
       }
 
+      const actionName = envelope.input.type.replace(/^action\./, "");
+      const lifecycleStart: ServerEnvelope<TProjection, TraceSnapshot> | null =
+        envelope.clientInputId
+          ? {
+              type: "action:lifecycle",
+              viewId: view.viewId,
+              cursor: "",
+              traceId: trace.traceId,
+              clientInputId: envelope.clientInputId,
+              action: actionName,
+              stage: "started",
+            }
+          : null;
+
+      if (lifecycleStart) {
+        await persistEnvelope(view, lifecycleStart, {
+          clientInputId: lifecycleStart.clientInputId as string,
+          viewId: view.viewId,
+          status: "accepted",
+        });
+      }
+
       const result = await executeAction(
         action,
         envelope.input as TActionInput,
@@ -350,7 +372,7 @@ export function createRuntime<
         cursor: "",
         traceId: trace.traceId,
         clientInputId: envelope.clientInputId,
-        action: envelope.input.type.replace(/^action\./, ""),
+        action: actionName,
         ok: result.ok,
         error: result.error,
         result: result.result,
@@ -376,6 +398,7 @@ export function createRuntime<
       }
 
       return runtimeResult([
+        ...(lifecycleStart ? [lifecycleStart] : []),
         actionResult,
         ...projected.envelopes,
         ...(await traceEnvelopesFor(view, projected.envelopes, trace, invocation)),
@@ -887,6 +910,15 @@ function protocolEventForEnvelope<TProjection>(
       type: "action.result",
       viewId: envelope.viewId,
       ok: envelope.ok,
+      clientInputId: envelope.clientInputId,
+    };
+  }
+
+  if (envelope.type === "action:lifecycle") {
+    return {
+      type: "action.result",
+      viewId: envelope.viewId,
+      ok: envelope.stage !== "failed",
       clientInputId: envelope.clientInputId,
     };
   }

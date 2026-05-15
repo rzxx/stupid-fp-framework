@@ -13,4 +13,4 @@ For the full design context, start with [docs/design/README.md](design/README.md
 
 The first vertical-slice implementation boundary is locked in [docs/prototype-plan.md](prototype-plan.md).
 
-The current implemented pivot is recorded in [docs/stage-7-record.md](stage-7-record.md). The review that drove it is [docs/framework-state-review-4.md](framework-state-review-4.md).
+The current implemented pivot is recorded in [docs/stage-8-record.md](stage-8-record.md). The review that drove it is [docs/framework-state-review-5.md](framework-state-review-5.md).

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   ActionResultEnvelope,
+  ActionLifecycleEnvelope,
   ErrorEnvelope,
   ProgramStreamBootstrap,
   ProjectionPatchEnvelope,
@@ -39,6 +40,8 @@ export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
     visible: TTrace[];
   };
   actions: {
+    pendingInputs: Record<string, TInput>;
+    lastLifecycle: ActionLifecycleEnvelope | null;
     lastResult: ActionResultEnvelope | null;
   };
   errors: {
@@ -66,6 +69,8 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
   );
   const [cursor, setCursor] = useState<string | null>(options.bootstrap?.cursor ?? null);
   const [traces, setTraces] = useState<TTrace[]>(options.bootstrap?.traces ?? []);
+  const [pendingInputs, setPendingInputs] = useState<Record<string, TInput>>({});
+  const [lastLifecycle, setLastLifecycle] = useState<ActionLifecycleEnvelope | null>(null);
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
   const [lastPatch, setLastPatch] = useState<ProjectionPatchEnvelope | null>(null);
@@ -149,9 +154,21 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
           setCursor(envelope.cursor);
           setTraces((current) => mergeTrace(current, envelope.trace));
         },
+        onActionLifecycle(envelope) {
+          setCursor(envelope.cursor);
+          setLastLifecycle(envelope);
+        },
         onActionResult(envelope) {
           setCursor(envelope.cursor);
           setLastResult(envelope);
+
+          if (envelope.clientInputId) {
+            setPendingInputs((current) => {
+              const next = { ...current };
+              delete next[envelope.clientInputId as string];
+              return next;
+            });
+          }
         },
         onError: setLastError,
       },
@@ -178,6 +195,8 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
       visible: traces,
     },
     actions: {
+      pendingInputs,
+      lastLifecycle,
       lastResult,
     },
     errors: {
@@ -187,7 +206,11 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
       lastPatch,
     },
     send(input) {
-      stream.current?.send(input);
+      const clientInputId = stream.current?.send(input);
+
+      if (clientInputId) {
+        setPendingInputs((current) => ({ ...current, [clientInputId]: input }));
+      }
     },
   };
 }

@@ -25,6 +25,15 @@ export type Deployment = {
   approvedAt?: string;
 };
 
+export type DeploymentRun = {
+  id: string;
+  teamId: string;
+  label: string;
+  status: "queued" | "running" | "healthy" | "blocked";
+  progress: number;
+  updatedAt: string;
+};
+
 export type AuditEntry = {
   id: string;
   at: string;
@@ -48,12 +57,21 @@ export type DeploymentDetail = DeploymentSummary & {
   auditTrail: AuditEntry[];
 };
 
+export type DeploymentRunSummary = {
+  id: string;
+  label: string;
+  status: "queued" | "running" | "healthy" | "blocked";
+  progress: number;
+  updatedAt: string;
+};
+
 export type ApprovalProjection = {
   route: "/teams/:teamId/deployments";
   team: { id: string; name: string };
   currentUser: { id: string; name: string; role: "approver" | "viewer" };
   pendingDeployments: DeploymentSummary[];
   selectedDeployment: DeploymentDetail | null;
+  activeRuns: DeploymentRunSummary[];
   tracePanelOpen: boolean;
   traces: TraceSnapshot[];
 };

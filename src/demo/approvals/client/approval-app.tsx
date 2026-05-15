@@ -30,6 +30,11 @@ export function ApprovalApp(props: {
 
   const projection = stream.projection.value;
   const selectedId = projection?.selectedDeployment?.id ?? null;
+  const pendingApprovalIds = new Set(
+    Object.values(stream.actions.pendingInputs).flatMap((input) =>
+      input.type === "action.approveDeployment" ? [input.deploymentId] : [],
+    ),
+  );
   const selectedIsPending = projection?.selectedDeployment?.status === "pending";
 
   return (
@@ -76,7 +81,8 @@ export function ApprovalApp(props: {
           />
           <DetailPanel
             projection={projection}
-            canApprove={selectedIsPending}
+            canApprove={selectedIsPending && !pendingApprovalIds.has(selectedId ?? "")}
+            pendingApproval={selectedId ? pendingApprovalIds.has(selectedId) : false}
             onApprove={(deploymentId) =>
               stream.send({
                 type: "action.approveDeployment",
@@ -89,6 +95,7 @@ export function ApprovalApp(props: {
             traces={stream.traces.visible}
             onToggle={() => stream.send({ type: "ui.trace.toggle" })}
           />
+          <RunPanel projection={projection} />
         </section>
       ) : (
         <section className="loading">Waiting for server projection...</section>
@@ -153,6 +160,7 @@ function DeploymentList(props: {
 function DetailPanel(props: {
   projection: ApprovalProjection;
   canApprove: boolean;
+  pendingApproval: boolean;
   onApprove: (deploymentId: string) => void;
 }) {
   const deployment = props.projection.selectedDeployment;
@@ -177,7 +185,7 @@ function DetailPanel(props: {
             onClick={() => props.onApprove(deployment.id)}
             type="button"
           >
-            Approve on server
+            {props.pendingApproval ? "Approval pending..." : "Approve on server"}
           </button>
           <h4>Audit trail</h4>
           <ol className="audit-list">
@@ -194,6 +202,31 @@ function DetailPanel(props: {
       ) : (
         <p className="empty-state">Select a pending deployment.</p>
       )}
+    </section>
+  );
+}
+
+function RunPanel(props: { projection: ApprovalProjection }) {
+  return (
+    <section className="panel run-panel">
+      <div className="panel-header">
+        <h2>Live deployment runs</h2>
+        <span>{props.projection.activeRuns.length}</span>
+      </div>
+      <div className="run-list">
+        {props.projection.activeRuns.map((run) => (
+          <article className="run-row" data-status={run.status} key={run.id}>
+            <div>
+              <strong>{run.label}</strong>
+              <small>
+                {run.status} at {formatTime(run.updatedAt)}
+              </small>
+            </div>
+            <meter max={100} min={0} value={run.progress} />
+            <span>{run.progress}%</span>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }
@@ -258,6 +291,10 @@ const approvalProjectionPatchManifest: ProjectionPatchManifest<ApprovalProjectio
     selectedDeployment: {
       kind: "replace-at-path",
       path: ["selectedDeployment"],
+    },
+    activeRuns: {
+      kind: "replace-at-path",
+      path: ["activeRuns"],
     },
     tracePanel: {
       kind: "replace-fields",

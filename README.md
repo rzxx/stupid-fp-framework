@@ -132,7 +132,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
-bun test          # runs 46 contract + integration + acceptance tests
+bun test          # runs 56 contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
 ```
@@ -162,7 +162,7 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Runtime Architecture](docs/design/runtime.md)** — how connect, receive, project, and invalidation work
 - **[Proposal](docs/proposal.md)** — the original pitch
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
-- **[Stage 7 Record](docs/stage-7-record.md)** — current Domain/UI state and stateless runtime implementation record
+- **[Stage 8 Record](docs/stage-8-record.md)** — current invocation, recovery, and adapter contract implementation record
 
 ---
 

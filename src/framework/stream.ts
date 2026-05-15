@@ -104,6 +104,16 @@ export type ActionResultEnvelope = {
   result?: JsonValue;
 };
 
+export type ActionLifecycleEnvelope = {
+  type: "action:lifecycle";
+  viewId: string;
+  cursor: string;
+  traceId: string;
+  clientInputId?: string;
+  action: string;
+  stage: "started" | "committed" | "failed";
+};
+
 export type TraceEnvelope<TTrace> = {
   type: "trace:update";
   viewId: string;
@@ -122,6 +132,7 @@ export type ServerEnvelope<TProjection, TTrace> =
   | ConnectedEnvelope
   | ProjectionPatchEnvelope
   | ProjectionEnvelope<TProjection>
+  | ActionLifecycleEnvelope
   | ActionResultEnvelope
   | TraceEnvelope<TTrace>
   | ErrorEnvelope;

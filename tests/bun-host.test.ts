@@ -124,6 +124,34 @@ describe("Bun host stream delivery", () => {
       server.stop(true);
     }
   });
+
+  test("dev watch mode injects reload client into served HTML", async () => {
+    const root = join(tmpdir(), `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    await writeFile(clientEntry, "console.log('host test');\n");
+    await writeFile(shellPath, '<html><body><div id="root"></div></body></html>');
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir: join(root, "dist"),
+      port: 0,
+      dev: { watch: true },
+    });
+
+    try {
+      const response = await fetch(`http://localhost:${server.port}/`);
+      const html = await response.text();
+
+      expect(html).toContain("/__stupid_fp_reload");
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 function createFanoutRuntime() {

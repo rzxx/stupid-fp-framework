@@ -5,7 +5,7 @@ import {
   type ProjectionContext,
   type ScreenDefinition,
 } from "../../framework";
-import { AuditTrail, Deployment, PendingDeployments } from "./resources";
+import { ActiveDeploymentRuns, AuditTrail, Deployment, PendingDeployments } from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
 import type {
   ApprovalProjection,
@@ -13,6 +13,8 @@ import type {
   AuditEntry,
   Deployment as DeploymentRecord,
   DeploymentDetail,
+  DeploymentRun as DeploymentRunRecord,
+  DeploymentRunSummary,
   DeploymentSummary,
 } from "./types";
 
@@ -34,6 +36,11 @@ export const approvalScreen: ScreenDefinition<
       const pendingDeployments = yield* context.region("pendingDeployments", () =>
         Effect.map(context.resources.read(PendingDeployments(teamId)), (deployments) =>
           deployments.map(summary),
+        ),
+      );
+      const activeRuns = yield* context.region("activeRuns", () =>
+        Effect.map(context.resources.read(ActiveDeploymentRuns(teamId)), (runs) =>
+          runs.map(runSummary),
         ),
       );
       const selectedDeployment = view.ui.selectedDeploymentId
@@ -59,6 +66,7 @@ export const approvalScreen: ScreenDefinition<
         },
         pendingDeployments,
         selectedDeployment,
+        activeRuns,
         tracePanelOpen: tracePanel.open,
         traces: tracePanel.traces,
       };
@@ -78,6 +86,16 @@ function selectedDetail(deploymentId: string, context: ProjectionContext<Approva
 
     return detail(deployment, auditTrail);
   });
+}
+
+function runSummary(run: DeploymentRunRecord): DeploymentRunSummary {
+  return {
+    id: run.id,
+    label: run.label,
+    status: run.status,
+    progress: run.progress,
+    updatedAt: run.updatedAt,
+  };
 }
 
 function summary(deployment: DeploymentRecord): DeploymentSummary {

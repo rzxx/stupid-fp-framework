@@ -19,6 +19,9 @@ const server = await serveBunProgram<ApprovalClientInput, ApprovalProjection, Tr
   shellPath: join(root, "shell.html"),
   stylesPath: join(root, "demo", "approvals", "client", "styles.css"),
   port,
+  dev: {
+    watch: Bun.env.NODE_ENV !== "production",
+  },
   initialRender: {
     resolve: () => ({
       route: "/teams/:teamId/deployments",

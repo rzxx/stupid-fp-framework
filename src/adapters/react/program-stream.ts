@@ -1,5 +1,6 @@
 import type {
   ActionResultEnvelope,
+  ActionLifecycleEnvelope,
   ClientEnvelope,
   ErrorEnvelope,
   ProgramStreamBootstrap,
@@ -18,6 +19,7 @@ export type ProgramStreamHandlers<TProjection, TTrace> = {
   onProjection: (envelope: ProjectionEnvelope<TProjection>) => void;
   onPatch?: (envelope: ProjectionPatchEnvelope) => void;
   onTrace: (envelope: TraceEnvelope<TTrace>) => void;
+  onActionLifecycle: (envelope: ActionLifecycleEnvelope) => void;
   onActionResult: (envelope: ActionResultEnvelope) => void;
   onError: (envelope: ErrorEnvelope) => void;
 };
@@ -187,6 +189,11 @@ export function connectProgramStream<TInput, TProjection, TTrace>(
 
       if (envelope.type === "trace:update") {
         options.handlers.onTrace(envelope);
+        return;
+      }
+
+      if (envelope.type === "action:lifecycle") {
+        options.handlers.onActionLifecycle(envelope);
         return;
       }
 

@@ -5,8 +5,8 @@ import {
   type ResourceDefinition,
   type ResourceKey,
 } from "../../framework";
-import { Audit, Deployments, type ApprovalEnvironment } from "./services";
-import type { AuditEntry, Deployment } from "./types";
+import { Audit, DeploymentRuns, Deployments, type ApprovalEnvironment } from "./services";
+import type { AuditEntry, Deployment, DeploymentRun } from "./types";
 
 export function PendingDeployments(teamId: string): ResourceKey<Deployment[]> {
   return resourceKey("PendingDeployments", teamId, `PendingDeployments(${teamId})`);
@@ -18,6 +18,10 @@ export function Deployment(deploymentId: string): ResourceKey<Deployment | undef
 
 export function AuditTrail(deploymentId: string): ResourceKey<AuditEntry[]> {
   return resourceKey("AuditTrail", deploymentId, `AuditTrail(${deploymentId})`);
+}
+
+export function ActiveDeploymentRuns(teamId: string): ResourceKey<DeploymentRun[]> {
+  return resourceKey("ActiveDeploymentRuns", teamId, `ActiveDeploymentRuns(${teamId})`);
 }
 
 export const approvalResources: ResourceDefinition<ApprovalEnvironment, unknown>[] = [
@@ -37,6 +41,12 @@ export const approvalResources: ResourceDefinition<ApprovalEnvironment, unknown>
     Effect.gen(function* () {
       const audit = yield* Audit;
       return audit.forDeployment(key.id);
+    }),
+  ),
+  defineResource("ActiveDeploymentRuns", (key) =>
+    Effect.gen(function* () {
+      const runs = yield* DeploymentRuns;
+      return runs.forTeam(key.id);
     }),
   ),
 ];

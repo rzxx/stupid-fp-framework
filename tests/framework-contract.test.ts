@@ -368,8 +368,13 @@ describe("framework contract", () => {
       clientInputId: "client-input-1",
       input: { type: "action.increment", amount: 1 },
     });
+    const lifecycle = result.envelopes.find((envelope) => envelope.type === "action:lifecycle");
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
 
+    expect(lifecycle).toMatchObject({
+      clientInputId: "client-input-1",
+      stage: "started",
+    });
     expect(action).toMatchObject({
       clientInputId: "client-input-1",
       ok: true,

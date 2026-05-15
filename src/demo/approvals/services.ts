@@ -1,7 +1,7 @@
 import { Context, Layer } from "../../framework";
 import type { ApprovalData } from "./data";
 import { createSeedData } from "./data";
-import type { AuditEntry, Deployment, Team, User } from "./types";
+import type { AuditEntry, Deployment, DeploymentRun, Team, User } from "./types";
 
 export type AuthService = {
   currentUser: () => User;
@@ -18,6 +18,11 @@ export type DeploymentService = {
   approve: (deploymentId: string, userId: string, approvedAt: string) => Deployment;
 };
 
+export type DeploymentRunService = {
+  forTeam: (teamId: string) => DeploymentRun[];
+  advance: (runId: string, progress: number) => DeploymentRun;
+};
+
 export type AuditService = {
   forDeployment: (deploymentId: string) => AuditEntry[];
   write: (entry: Omit<AuditEntry, "id" | "at">) => AuditEntry;
@@ -31,6 +36,7 @@ export type ApprovalServices = {
   auth: AuthService;
   teams: TeamService;
   deployments: DeploymentService;
+  runs: DeploymentRunService;
   audit: AuditService;
   clock: ClockService;
   data: ApprovalData;
@@ -42,10 +48,14 @@ export class Deployments extends Context.Tag("approvals/Deployments")<
   Deployments,
   DeploymentService
 >() {}
+export class DeploymentRuns extends Context.Tag("approvals/DeploymentRuns")<
+  DeploymentRuns,
+  DeploymentRunService
+>() {}
 export class Audit extends Context.Tag("approvals/Audit")<Audit, AuditService>() {}
 export class Clock extends Context.Tag("approvals/Clock")<Clock, ClockService>() {}
 
-export type ApprovalEnvironment = Auth | Teams | Deployments | Audit | Clock;
+export type ApprovalEnvironment = Auth | Teams | Deployments | DeploymentRuns | Audit | Clock;
 
 export function createApprovalServices(options?: {
   currentUserId?: string;
@@ -105,6 +115,23 @@ export function createApprovalServices(options?: {
         return deployment;
       },
     },
+    runs: {
+      forTeam(teamId) {
+        return data.runs.filter((run) => run.teamId === teamId);
+      },
+      advance(runId, progress) {
+        const run = data.runs.find((entry) => entry.id === runId);
+
+        if (!run) {
+          throw new Error(`Unknown deployment run ${runId}`);
+        }
+
+        run.progress = Math.max(run.progress, progress);
+        run.status = run.progress >= 100 ? "healthy" : "running";
+        run.updatedAt = new Date().toISOString();
+        return run;
+      },
+    },
     audit: {
       forDeployment(deploymentId) {
         return data.audit.filter((entry) => entry.deploymentId === deploymentId);
@@ -133,6 +160,7 @@ export function createApprovalLayer(services: ApprovalServices): Layer.Layer<App
     Layer.succeed(Auth, services.auth),
     Layer.succeed(Teams, services.teams),
     Layer.succeed(Deployments, services.deployments),
+    Layer.succeed(DeploymentRuns, services.runs),
     Layer.succeed(Audit, services.audit),
     Layer.succeed(Clock, services.clock),
   );

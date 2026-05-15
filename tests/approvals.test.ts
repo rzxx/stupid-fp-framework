@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createApprovalRuntime } from "../src/demo/approvals/program";
+import { ActiveDeploymentRuns } from "../src/demo/approvals/resources";
 import { createApprovalServices } from "../src/demo/approvals/services";
 import type { ApprovalProjection } from "../src/demo/approvals/types";
 import type { ProjectionEnvelope, ProjectionPatchEnvelope } from "../src/framework";
@@ -85,6 +86,31 @@ describe("deployment approval workflow", () => {
 
     expect(actionResult).toMatchObject({ ok: false });
     expect(services.audit.forDeployment("deploy-search-23")).toHaveLength(auditCount);
+  });
+
+  test("live deployment run resource updates through external invalidation", async () => {
+    const services = createApprovalServices();
+    const runtime = createApprovalRuntime({ services });
+    const connected = await connect(runtime);
+
+    services.runs.advance("run-api-rollout", 88);
+    const result = await runtime.invalidate([ActiveDeploymentRuns("team-platform")]);
+    const patch = latestPatch(result.envelopes);
+    const runsValue = patch.patch.regions.find((region) => region.id === "activeRuns")?.value;
+    const runs = Array.isArray(runsValue) ? runsValue : [];
+
+    expect(connected.projection.activeRuns).toHaveLength(2);
+    expect(
+      runs.some(
+        (run) =>
+          run !== null &&
+          typeof run === "object" &&
+          "id" in run &&
+          run.id === "run-api-rollout" &&
+          "progress" in run &&
+          run.progress === 88,
+      ),
+    ).toBe(true);
   });
 });
 
