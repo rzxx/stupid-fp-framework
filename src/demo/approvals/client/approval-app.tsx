@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import {
-  applyRegionValuePatch,
+  createProjectionPatchApplier,
   useProgramStream,
+  type ProjectionPatchManifest,
   type ProgramStreamReactOptions,
 } from "../../../adapters/react";
 import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
@@ -20,27 +21,7 @@ export function ApprovalApp(props: {
       storageKey: "approval-stream",
       bootstrap: props.bootstrap,
       projectionTraces: (projection) => projection.traces,
-      applyPatch: (projection, patch) =>
-        applyRegionValuePatch(projection, patch, {
-          pendingDeployments: (current, value) =>
-            Array.isArray(value)
-              ? {
-                  ...current,
-                  pendingDeployments: value as ApprovalProjection["pendingDeployments"],
-                }
-              : current,
-          selectedDeployment: (current, value) => ({
-            ...current,
-            selectedDeployment: value as ApprovalProjection["selectedDeployment"],
-          }),
-          tracePanel: (current, value) => {
-            if (!isTracePanelPatch(value)) {
-              return current;
-            }
-
-            return { ...current, tracePanelOpen: value.open, traces: value.traces };
-          },
-        }),
+      applyPatch: createProjectionPatchApplier(approvalProjectionPatchManifest),
     };
   }, [props.bootstrap]);
   const stream = useProgramStream<ApprovalClientInput, ApprovalProjection, TraceSnapshot>(
@@ -267,15 +248,23 @@ function formatTime(value: string): string {
   }).format(new Date(value));
 }
 
-function isTracePanelPatch(
-  value: unknown,
-): value is { open: boolean; traces: ApprovalProjection["traces"] } {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "open" in value &&
-    typeof value.open === "boolean" &&
-    "traces" in value &&
-    Array.isArray(value.traces)
-  );
-}
+const approvalProjectionPatchManifest: ProjectionPatchManifest<ApprovalProjection> = {
+  projectionVersion: 1,
+  regions: {
+    pendingDeployments: {
+      kind: "replace-at-path",
+      path: ["pendingDeployments"],
+    },
+    selectedDeployment: {
+      kind: "replace-at-path",
+      path: ["selectedDeployment"],
+    },
+    tracePanel: {
+      kind: "replace-fields",
+      fields: [
+        { from: ["open"], to: ["tracePanelOpen"] },
+        { from: ["traces"], to: ["traces"] },
+      ],
+    },
+  },
+};
