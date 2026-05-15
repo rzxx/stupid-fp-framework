@@ -28,6 +28,9 @@ builders, and document state placement rules.
   inputs and reports an error if the stream closes before an action result arrives, while navigation
   inputs are not tracked as pending actions.
 - Updated public docs and README examples to teach the builder syntax and state placement rule.
+- Superseded the broad "local React state is valid local UI state" wording. Current docs treat
+  `UIState` as the framework's app-level view/editing state and React state as adapter/render
+  mechanics only.
 
 ## Verification
 

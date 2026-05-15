@@ -14,12 +14,15 @@ The secondary idea is:
 Typed resources and actions replace fetch/cache/API glue as the default app model.
 ```
 
-Live views matter, but they are not the whole framework. A live view is a host optimization over a restorable `ViewContext`. Durable resources remain the source of truth, while UI state is view/editing context that can be local-only or checkpointed when projection/resume needs it.
+Live views matter, but they are not the whole framework. A live view is a host optimization over a restorable `ViewContext`. Durable resources remain the source of truth, while UI state is view/editing context owned by the program.
 
-The current pivot is Domain + UI state. Domain state is durable workflow truth, modeled through
-resources, actions, effects, and invalidation. UI state is view/editing context: local-first where
-possible, checkpointed when a server projection or resume needs it, and promoted to domain state
-when it becomes product truth.
+The current pivot is two application state tiers plus adapter mechanics. Domain state is durable
+workflow truth, modeled through resources, actions, effects, and invalidation. `UIState` is
+view/editing context. React `useState` is not a third application state tier; it is for adapter and
+render mechanics the program should not observe.
+
+Optimistic UI is modeled as a temporary projection overlay tied to a typed input. It is confirmed or
+rolled back by the server projection, action result, and trace pipeline.
 
 The kernel should be able to restore a view checkpoint and process an input without depending on
 process memory. Bun is the first host adapter, not the whole runtime model.

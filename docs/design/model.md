@@ -120,9 +120,13 @@ Examples:
 - active timeline tab
 - trace panel visibility
 
-`UIEvent` updates UI state. It may cause projection recomputation, but it must not mutate domain truth. If losing a value only changes presentation, it belongs in UI state. If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state, it belongs in domain state.
+`UIEvent` updates UI state. It may cause projection recomputation, but it must not mutate domain truth. If a value is application-level view or editing context, it belongs in UI state. If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state, it belongs in domain state.
 
-UI state is local-first by default, can be checkpointed for resume, and should be promoted to domain state when it becomes product truth.
+UI state is the framework's app-level `useState`. React local state is not a third application state tier. It remains valid inside adapters and components for render mechanics the program should not observe: focus, element measurement, hover, pointer position, animation phase, or third-party widget internals.
+
+Optimistic UI is also not a third source of truth. It is a temporary projection overlay tied to a typed input. The adapter can show the optimistic projection immediately, then confirm or roll it back when server projection patches, action results, and traces arrive.
+
+UI state can be checkpointed for resume and should be promoted to domain state when it becomes product truth.
 
 ### Resource Event
 

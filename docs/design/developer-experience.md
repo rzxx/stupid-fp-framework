@@ -78,9 +78,11 @@ Examples:
 Actions should read like workflow transactions. UI events should read like view/editing changes.
 Resource and system events should read like runtime inputs, not user workflow commands.
 
-### 4. Separate Domain State From UI State
+### 4. Keep Two Application State Tiers
 
-Domain state belongs in resources and actions. UI state belongs in the UI tier.
+Domain state belongs in resources and actions. App-level view and editing state belongs in
+`UIState`. React local state is not a third application state tier; it is for adapter and render
+mechanics the program should not observe.
 
 Examples of domain state:
 
@@ -98,20 +100,35 @@ Examples of UI state:
 - active timeline tab
 - expanded trace event
 
-The goal is not to forbid client-side state. The goal is to stop accidental client ownership of important server workflow state.
+Examples of React local state that remain acceptable:
+
+- focus bookkeeping
+- element measurement
+- pointer drag position
+- animation phase
+- uncontrolled input composition before commit
+- third-party widget internals
+
+The goal is not to forbid React implementation mechanics. The goal is to stop accidental client
+ownership of application behavior.
 
 Use this placement rule:
 
 ```txt
-If losing it only changes presentation, it can be local UI state.
-If the server projection or resume depends on it, model it as UIState.
+If it is app-level view or editing context, model it as UIState.
 If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state,
 model it as domain state through resources and actions.
+If the program should never observe it, keep it as adapter/render mechanics.
 ```
 
 ### 5. Project Server State Into UI
 
-The screen observes resources, combines them with UI state, and produces a projection. The React adapter renders that projection and hosts normal React components where useful.
+The screen observes resources, combines them with UI state, and produces a projection. The React
+adapter renders that projection and hosts normal React components where useful.
+
+Optimistic UI is expressed as a temporary projection overlay tied to a typed input, not as a
+separate state store. UI events can optimistically update view/editing state. Actions can
+optimistically update the projection while their traces explain acceptance, rejection, or rollback.
 
 ### 6. Inspect The Trace
 

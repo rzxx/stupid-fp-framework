@@ -19,7 +19,7 @@ browser event → typed program input → server runs effect → resources updat
 → runtime figures out what changed → streams UI patch → React renders it
 ```
 
-No API layer. No client-side cache soup. No manual sync. Domain state lives in the server program; UI state is explicit view/editing context; React renders the projection.
+No API layer. No client-side cache soup. No manual sync. Domain state lives in the server program; UI state is explicit view/editing context; React renders the projection. Optimistic UI is a temporary projection overlay tied to typed inputs and server traces, not another source of truth.
 
 ---
 
@@ -129,10 +129,14 @@ const program = Program.define("approval")
   .build();
 ```
 
-Local React state is still valid for local-only presentation state. If losing it only changes how a
-viewer is looking at the screen, keep it local. If the server projection or resume depends on it,
-model it as `UIState`. If losing it corrupts workflow truth, model it as domain state through
-resources and actions.
+Application state has two public homes. If losing it corrupts workflow truth, model it as domain
+state through resources and actions. If it is view or editing context, model it as `UIState`.
+React state is only for adapter and render mechanics the program should not observe, such as focus,
+measurement, pointer position, animation phase, or third-party widget internals.
+
+Optimistic UI belongs to the input pipeline. The React adapter can apply a temporary projection
+overlay when a UI event or action is sent, then confirm or roll it back when the server projection,
+action result, or trace arrives.
 
 ---
 
