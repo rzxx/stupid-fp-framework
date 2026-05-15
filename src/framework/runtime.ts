@@ -573,16 +573,11 @@ export function createRuntime<
     invocation = defaultInvocationContext(),
   ): Promise<RuntimeResult<TProjection>> {
     const serializedKeys = keys.map(serializeResourceKey);
-    const indexedAffected = await runStore(() =>
-      store.findViewsObserving(invocation.fanoutScope, serializedKeys),
-    );
+    const indexedAffected = await runStore(() => store.findViewsObservingResources(serializedKeys));
     const affected =
       indexedAffected.length > 0
         ? indexedAffected
-        : affectedRegions(await restoreCheckpointedViews(), keys).filter((entry) => {
-            const view = views.get(entry.viewId);
-            return view?.fanoutScope === invocation.fanoutScope;
-          });
+        : affectedRegions(await restoreCheckpointedViews(), keys);
 
     program.resourceGraph.invalidate(keys);
     await runResourceInvalidateHooks(keys, invocation);

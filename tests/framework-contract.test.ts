@@ -886,6 +886,21 @@ describe("framework contract", () => {
     expect(result.envelopes.some((envelope) => envelope.type === "projection:update")).toBe(false);
   });
 
+  test("external resource invalidation refreshes non-global fanout observations", async () => {
+    const services = createServices();
+    const runtime = createRuntime(createCounterProgram(services), {
+      fanoutScope: () => "team-platform",
+    });
+    const connected = await connect(runtime);
+
+    services.counter.value = 11;
+    const result = await runtime.invalidate([counterKey]);
+    const patch = latestPatch(result.envelopes);
+
+    expect(patch.viewId).toBe(connected.viewId);
+    expect(applyCounterPatch(connected.projection, patch).count).toBe(11);
+  });
+
   test("action invalidation sends trace envelopes to every affected view", async () => {
     const services = createServices();
     const runtime = createCounterRuntime(services);
@@ -1050,6 +1065,74 @@ describe("framework contract", () => {
     });
   });
 
+  test("memory store commit conflict does not append partial envelopes", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const checkpoint = createCheckpoint("view-conflict", "scope-a", [counterRegion(1)]);
+
+    await store.commitInvocation({
+      envelopes: [
+        {
+          viewId: checkpoint.viewId,
+          envelope: {
+            type: "projection:update",
+            viewId: checkpoint.viewId,
+            cursor: "",
+            projectionVersion: 1,
+            projection: projectionFor(1),
+            regions: [counterRegion(1)],
+          },
+        },
+      ],
+      views: [{ checkpoint, expectedRevision: 0 }],
+    });
+
+    await expect(
+      store.commitInvocation({
+        envelopes: [
+          {
+            viewId: checkpoint.viewId,
+            envelope: {
+              type: "projection:update",
+              viewId: checkpoint.viewId,
+              cursor: "",
+              projectionVersion: 2,
+              projection: projectionFor(2),
+              regions: [counterRegion(2)],
+            },
+          },
+        ],
+        views: [
+          {
+            checkpoint: {
+              ...checkpoint,
+              projectionVersion: 2,
+              observedRegions: [counterRegion(2)],
+            },
+            expectedRevision: 0,
+          },
+        ],
+        observations: [
+          {
+            fanoutScope: "scope-a",
+            viewId: checkpoint.viewId,
+            regions: [counterRegion(2)],
+          },
+        ],
+        inputRecords: [
+          {
+            clientInputId: "input-conflict",
+            viewId: checkpoint.viewId,
+            status: "committed",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: "commit-conflict" });
+
+    expect(await store.readEnvelopesAfter(checkpoint.viewId, "cursor-1")).toEqual([]);
+    expect(await store.findViewsObservingResources([counterKey])).toEqual([]);
+    expect(await store.readInputRecord("input-conflict")).toBeNull();
+  });
+
   test("observation index does not fan out across scopes", async () => {
     const store = new MemoryRuntimeStore<UIState, Projection>();
 
@@ -1067,6 +1150,16 @@ describe("framework contract", () => {
     expect(await store.findViewsObserving("team-a", [counterKey])).toEqual([
       {
         viewId: "view-a",
+        regions: [counterRegion(1)],
+      },
+    ]);
+    expect(await store.findViewsObservingResources([counterKey])).toEqual([
+      {
+        viewId: "view-a",
+        regions: [counterRegion(1)],
+      },
+      {
+        viewId: "view-b",
         regions: [counterRegion(1)],
       },
     ]);

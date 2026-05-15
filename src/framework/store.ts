@@ -118,6 +118,9 @@ export type RuntimeStore<TUIState, TProjection, TTrace = TraceSnapshot> = {
     fanoutScope: string,
     keys: readonly SerializedResourceKey[],
   ) => Promise<ObservationIndexMatch[]>;
+  findViewsObservingResources: (
+    keys: readonly SerializedResourceKey[],
+  ) => Promise<ObservationIndexMatch[]>;
   readInputRecord: (clientInputId: string) => Promise<RuntimeInputRecord | null>;
 };
 
@@ -157,6 +160,7 @@ export class MemoryRuntimeStore<
   async commitInvocation(
     commit: RuntimeStoreCommit<TUIState, TProjection, TTrace>,
   ): Promise<RuntimeStoreCommitResult<TUIState, TProjection, TTrace>> {
+    this.#validateViewWrites(commit.views ?? []);
     const envelopes = this.#commitEnvelopes(commit.envelopes ?? []);
     const views = this.#commitViews(commit.views ?? [], envelopes);
 
@@ -229,6 +233,12 @@ export class MemoryRuntimeStore<
     return findObservationMatches([...this.#observations.values()], fanoutScope, keys);
   }
 
+  async findViewsObservingResources(
+    keys: readonly SerializedResourceKey[],
+  ): Promise<ObservationIndexMatch[]> {
+    return findObservationMatches([...this.#observations.values()], undefined, keys);
+  }
+
   async readInputRecord(clientInputId: string): Promise<RuntimeInputRecord | null> {
     return this.#inputRecords.get(clientInputId) ?? null;
   }
@@ -256,13 +266,6 @@ export class MemoryRuntimeStore<
       const current = this.#views.get(write.checkpoint.viewId);
       const currentRevision = current?.checkpointRevision ?? 0;
 
-      if (write.expectedRevision !== undefined && write.expectedRevision !== currentRevision) {
-        throw runtimeStoreError(
-          "commit-conflict",
-          `Checkpoint ${write.checkpoint.viewId} expected revision ${write.expectedRevision} but found ${currentRevision}`,
-        );
-      }
-
       const cursor =
         [...envelopes].reverse().find((entry) => entry.viewId === write.checkpoint.viewId)
           ?.cursor ??
@@ -288,6 +291,20 @@ export class MemoryRuntimeStore<
       viewId: write.viewId,
       regions: write.regions,
     });
+  }
+
+  #validateViewWrites(writes: RuntimeViewWrite<TUIState>[]): void {
+    for (const write of writes) {
+      const current = this.#views.get(write.checkpoint.viewId);
+      const currentRevision = current?.checkpointRevision ?? 0;
+
+      if (write.expectedRevision !== undefined && write.expectedRevision !== currentRevision) {
+        throw runtimeStoreError(
+          "commit-conflict",
+          `Checkpoint ${write.checkpoint.viewId} expected revision ${write.expectedRevision} but found ${currentRevision}`,
+        );
+      }
+    }
   }
 }
 
@@ -405,6 +422,13 @@ export class JsonFileRuntimeStore<
   ): Promise<ObservationIndexMatch[]> {
     const state = await this.#read();
     return findObservationMatches(state.observations, fanoutScope, keys);
+  }
+
+  async findViewsObservingResources(
+    keys: readonly SerializedResourceKey[],
+  ): Promise<ObservationIndexMatch[]> {
+    const state = await this.#read();
+    return findObservationMatches(state.observations, undefined, keys);
   }
 
   async readInputRecord(clientInputId: string): Promise<RuntimeInputRecord | null> {
@@ -541,14 +565,14 @@ function withCursor<TProjection, TTrace>(
 
 function findObservationMatches(
   observations: RuntimeObservationWrite[],
-  fanoutScope: string,
+  fanoutScope: string | undefined,
   keys: readonly SerializedResourceKey[],
 ): ObservationIndexMatch[] {
   const invalidated = new Set(keys.map((key) => `${key.type}:${key.id}`));
   const matches: ObservationIndexMatch[] = [];
 
   for (const observation of observations) {
-    if (observation.fanoutScope !== fanoutScope) {
+    if (fanoutScope !== undefined && observation.fanoutScope !== fanoutScope) {
       continue;
     }
 
