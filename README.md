@@ -1,6 +1,6 @@
 # stupid-fp-framework
 
-**Build webapps as durable server programs, not client/server glue.**
+**Build workflow-heavy webapps as durable server programs with live projections and causal traces.**
 
 [![Status](https://img.shields.io/badge/status-experimental-orange)]()
 
@@ -10,34 +10,40 @@
 
 ## what if.
 
-Every webapp starts simple and grows into a tangle of fetch calls, loading states, cache invalidation, and two codebases that need to stay in sync.
+Every workflow app starts simple and grows into a tangle of fetch calls, loading states, cache
+invalidation, background-job polling, WebSocket glue, audit logs, and two codebases that need to
+stay in sync.
 
-What if instead you wrote **one program** — a server program — and the UI was just a projection of its state?
+What if instead you wrote **one durable server program** and the browser rendered its live
+projection?
 
 ```
-browser event → typed program input → server runs effect → resources update
-→ runtime figures out what changed → streams UI patch → React renders it
+typed input -> Effect transaction -> resource invalidation
+-> projection recomputation -> streamed patch/update -> causal trace
 ```
 
-No API layer. No client-side cache soup. No manual sync. Domain state lives in the server program; UI state is explicit view/editing context; React renders the projection. Optimistic UI is a temporary projection overlay tied to typed inputs and server traces, not another source of truth.
+No handwritten request/response API layer for app state. No client-side cache soup. No manual sync.
+Workflow truth lives in resources and actions; server-observed view/editing context lives in
+`UIState`; React renders projections and may keep disposable renderer state outside the program.
+Every meaningful input can leave a trace that explains why the UI changed.
 
 ---
 
 ## this is
 
 - A **Bun-native** framework (no webpack, no vite by default — just `bun --hot`)
-- **Effect-powered** backend — typed, composable, testable server logic
+- **Effect-native workflow runtime** — typed, composable, testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
-- **Domain + UI state** — durable workflow truth stays in resources/actions; transient view/editing context is modeled as UI state
+- **Program-owned state** — durable workflow truth stays in resources/actions; server-observed view/editing context is modeled as `UIState`
 - **Stateless-capable runtime** — view checkpoints and stream history can be restored from runtime stores instead of process memory
 - **Reactive by default** — actions invalidate resources, runtime pushes patches to all affected clients
 - **Typed program inputs** — actions, UI events, resource events, and system events have distinct jobs
-- **Causally traced** — program inputs leave traces; debugging is actually pleasant
+- **Trace-first** — program inputs explain validation, auth, effects, invalidation, recomputation, and streamed patches
 
 ## this is not
 
 - ❌ A React meta-framework (it's not Next.js, Remix, or similar)
-- ❌ An API framework (you don't write endpoints — you write a program)
+- ❌ A request/response API framework (you don't write app-state endpoints — you write a program)
 - ❌ A replacement for everything (SSR, SEO, static sites — see what it is above)
 - ❌ Production-ready (see status below)
 
@@ -51,7 +57,10 @@ You define three things:
 2. **Actions** — things users can do (e.g., `approveDeployment`), with validation, auth, and effects
 3. **UI state + screens** — how view/editing state combines with resources into UI data, grouped into named `region`s
 
-The runtime wires them together. When an action runs, it invalidates resources. When a UI event runs, it updates UI state without mutating domain truth. The runtime figures out which views are affected, recomputes their projections, and pushes UI patches over WebSocket. React just renders.
+The runtime wires them together. When an action runs, it invalidates resources. When a UI event
+runs, it updates server-observed view context without mutating domain truth. The runtime figures out
+which views are affected, recomputes their projections, and pushes UI patches over WebSocket. React
+renders the projection and may keep renderer-owned state that the program cannot observe.
 
 ```ts
 class Deployments extends Context.Tag("Deployments")<
@@ -129,20 +138,30 @@ const program = Program.define("approval")
   .build();
 ```
 
-Application state has two public homes. If losing it corrupts workflow truth, model it as domain
-state through resources and actions. If it is view or editing context, model it as `UIState`.
-React state is only for adapter and render mechanics the program should not observe, such as focus,
-measurement, pointer position, animation phase, or third-party widget internals.
+Application state has one ownership question: should the program observe it?
 
-Optimistic UI belongs to the input pipeline. The React adapter can apply a temporary projection
-overlay when a UI event or action is sent, then confirm or roll it back when the server projection,
-action result, or trace arrives.
+Program-owned state includes durable domain truth through resources/actions and server-observed
+view/editing context through `UIState`. Use it when state affects projection, resume,
+authorization, sharing, collaboration, traceability, or server-side resource reads.
+
+Renderer-owned state lives outside the program and must be disposable. Use it only for local
+interaction mechanics the program should not observe, such as focus, measurement, hover, pointer
+position, animation phase, uncontrolled input composition before commit, or third-party widget
+internals.
+
+Protocol state is neither app truth nor renderer state. Optimistic overlays, pending input IDs,
+cursors, and reconnect state belong to the adapter/runtime protocol. Optimistic UI is a temporary
+projection overlay tied to a typed input, then confirmed or rolled back by the server projection,
+action result, or trace.
 
 ```ts
 stream.ui.send(
-  { type: "ui.deployment.filter", value },
+  { type: "ui.trace.toggle" },
   {
-    optimistic: (projection) => ({ ...projection, deploymentFilter: value }),
+    optimistic: (projection) => ({
+      ...projection,
+      tracePanelOpen: !projection.tracePanelOpen,
+    }),
   },
 );
 
@@ -200,8 +219,9 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Proposal](docs/proposal.md)** — the original pitch
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
 - **[Stage 8 Record](docs/stage-8-record.md)** — current invocation, recovery, and adapter contract implementation record
-- **[Framework State Review 6](docs/framework-state-review-6.md)** — current patch, routing, dev server, and API direction
+- **[Framework State Review 6](docs/framework-state-review-6.md)** — patch, routing, dev server, and API direction
 - **[Stage 9 Record](docs/stage-9-record.md)** — implementation record for patch manifests, navigation, Bun assets, and builder APIs
+- **[Framework State Review 7](docs/framework-state-review-7.md)** — Stage 10 semantic hardening for state ownership, resource scopes, and trace-first positioning
 
 ---
 
@@ -209,11 +229,15 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 
 This project is "stupid" in the sense that it challenges the complexity we've accepted as normal.
 
-The modern webapp stack demands you think about: client state, server state, cache invalidation, API design, loading states, optimistic updates, revalidation, stale-while-revalidate, suspense boundaries, error boundaries, request waterfalls...
+The modern workflow stack demands you think about: client state, server state, cache invalidation,
+API design, loading states, optimistic updates, revalidation, stale-while-revalidate, suspense
+boundaries, error boundaries, request waterfalls, background jobs, audit logs, and "why did this
+happen?" debugging.
 
 What if instead you just didn't?
 
-What if writing a webapp felt like writing a **single program** — one that happens to render a UI in a browser?
+What if writing a workflow app felt like writing a **durable server program** — one that happens to
+project a live UI into a browser?
 
 That's the bet. It might be wrong. But it's the reason this repo exists.
 

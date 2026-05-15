@@ -72,13 +72,19 @@ The resource graph tracks typed observable state.
 Responsibilities:
 
 - identify resources by stable typed keys
+- resolve cache scope for resources whose values vary by fanout, principal, or custom context
 - read resource values through effectful loaders
 - track which screens or views observe which resources
-- mark resources stale after actions
+- mark all observed scoped variants stale when actions invalidate a base resource key
 - recompute affected projections
 - support live resource updates later
 
 The resource graph is the answer to fetch/cache soup. The developer should not manually decide which local query cache to poke after every action. The program should know what changed.
+
+Resource identity has two layers. The base identity is the app-facing key, such as
+`PendingDeployments(teamId)`. The cache identity also includes the resolved scope when a resource is
+permission-, principal-, tenant-, or fanout-shaped. The first invalidation contract should favor
+correctness: invalidating a base key refreshes all observed scoped variants of that key.
 
 ### Action And Effect Executor
 
@@ -110,10 +116,12 @@ Responsibilities:
 - support reconnect cursors
 - restore or rebuild state after disconnect
 
-The view is allowed to make the app feel live. It should not become an unsafe hidden database. The key design pressure is:
+The view is allowed to make the app feel live. It should not become an unsafe hidden database. The
+key design pressure is:
 
 ```txt
 If losing this state would corrupt the product, it should be a resource, not only UI state.
+If the program does not need to observe it, it should stay renderer-owned and disposable.
 ```
 
 ### Stream Protocol
@@ -157,7 +165,9 @@ Responsibilities:
 - preserve compatibility with normal React components
 - keep React ecosystem libraries usable
 
-React should not own data fetching, mutation, cache invalidation, or workflow state by default. Those belong to the server program model.
+React should not own data fetching, mutation, cache invalidation, or workflow state by default.
+Those belong to the server program model. React may own renderer state that is outside the program
+and safe to lose.
 
 ### Trace And Devtools Model
 

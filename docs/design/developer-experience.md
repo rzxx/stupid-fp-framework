@@ -25,7 +25,7 @@ What resources does that screen observe?
 What inputs can enter from the browser, host, or resource system?
 Which actions, UI events, resource events, or system events handle those inputs?
 What effects are allowed?
-Which state is durable and which state is conversational?
+Which state is program-owned and which state is renderer-owned?
 What projection should be streamed back?
 How will we explain why the UI changed?
 ```
@@ -60,7 +60,23 @@ Examples:
 - `IncidentTimeline(id)`
 - `AgentRun(id)`
 
-These are not fetch functions sprinkled into components. They are observable resources that screens can subscribe to and actions can invalidate.
+These are not fetch functions sprinkled into components. They are observable resources that screens
+can subscribe to and actions can invalidate.
+
+Also decide the resource cache scope. A resource that returns the same value for every reader can be
+`global`. A resource whose value depends on tenant/team fanout should be `fanout` scoped. A resource
+whose value depends on current user permissions should be `principal` scoped or `custom` scoped.
+
+The important rule:
+
+```txt
+If two readers can receive different values for the same base resource key, the resource needs a
+cache scope beyond type + id.
+```
+
+Invalidation should remain broad by default. An action invalidating `PendingDeployments(teamId)`
+should refresh every observed scoped variant of that base key unless a later exact-scope API is
+explicitly chosen.
 
 ### 3. Define Program Inputs
 
@@ -78,13 +94,18 @@ Examples:
 Actions should read like workflow transactions. UI events should read like view/editing changes.
 Resource and system events should read like runtime inputs, not user workflow commands.
 
-### 4. Keep Two Application State Tiers
+### 4. Place State By Ownership
 
-Domain state belongs in resources and actions. App-level view and editing state belongs in
-`UIState`. React local state is not a third application state tier; it is for adapter and render
-mechanics the program should not observe.
+Do not start by asking "server state or client state?" Start by asking whether the program must
+observe the value.
 
-Examples of domain state:
+Program-owned state is visible to the server program. It can affect projection, resume,
+authorization, sharing, collaboration, traces, or resource reads.
+
+Renderer-owned state is outside the program. It can use React state or third-party widget state, but
+it must be disposable.
+
+Examples of program-owned domain state:
 
 - deployment approval status
 - incident owner
@@ -92,33 +113,37 @@ Examples of domain state:
 - AI run status
 - audit entries
 
-Examples of UI state:
+Examples of program-owned `UIState`:
 
 - selected deployment row
 - open details panel
-- current filter
+- filter text that changes server reads, resume, URL/shareability, or trace policy
 - active timeline tab
 - expanded trace event
 
-Examples of React local state that remain acceptable:
+Examples of renderer-owned state:
 
 - focus bookkeeping
 - element measurement
+- hover state
 - pointer drag position
 - animation phase
 - uncontrolled input composition before commit
 - third-party widget internals
 
-The goal is not to forbid React implementation mechanics. The goal is to stop accidental client
-ownership of application behavior.
+Protocol state is separate from both. Optimistic overlays, pending client input IDs, cursors, action
+lifecycle status, and reconnect state are adapter/runtime machinery. They are not app truth.
+
+The goal is not to forbid React implementation mechanics. The goal is to stop accidental renderer
+ownership of program behavior.
 
 Use this placement rule:
 
 ```txt
-If it is app-level view or editing context, model it as UIState.
-If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state,
-model it as domain state through resources and actions.
-If the program should never observe it, keep it as adapter/render mechanics.
+If the program must observe it, make it program-owned.
+If losing it corrupts workflow truth, make it a domain resource/action.
+If it is server-observed view/editing context, make it UIState.
+If the program must never observe it and losing it is safe, keep it renderer-owned.
 ```
 
 ### 5. Project Server State Into UI
@@ -126,9 +151,10 @@ If the program should never observe it, keep it as adapter/render mechanics.
 The screen observes resources, combines them with UI state, and produces a projection. The React
 adapter renders that projection and hosts normal React components where useful.
 
-Optimistic UI is expressed as a temporary projection overlay tied to a typed input, not as a
-separate state store. UI events can optimistically update view/editing state. Actions can
-optimistically update the projection while their traces explain acceptance, rejection, or rollback.
+Optimistic UI is expressed as protocol state: a temporary projection overlay tied to a typed input,
+not as a separate state store. UI events can optimistically update server-observed view/editing
+state. Actions can optimistically update the projection while their traces explain acceptance,
+rejection, or rollback.
 
 ```ts
 stream.ui.send(
@@ -205,7 +231,29 @@ const PendingDeployments = Resource.define("PendingDeployments")
   );
 ```
 
-The important idea is that resources are named and observable. They are part of the program model, not hidden fetch calls.
+The important idea is that resources are named and observable. They are part of the program model,
+not hidden fetch calls.
+
+Resource scope is part of the target resource contract. Illustrative shape:
+
+```ts
+const PendingDeployments = Resource.define("PendingDeployments")
+  .value<DeploymentRecord[]>()
+  .scope("principal")
+  .key(Schema.Struct({ teamId: Schema.String }), {
+    id: (params) => params.teamId,
+  })
+  .load((params) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.pendingVisibleToCurrentUser(params.teamId);
+    }),
+  );
+```
+
+The scope means `PendingDeployments(teamId)` has a base identity, but its cached value is separated
+by current principal. Invalidating the base key should refresh all observed principal-scoped
+variants.
 
 ### Action As Server Transaction
 
@@ -253,7 +301,8 @@ const ApprovalUI = UIState.define("approval.ui")
   .build();
 ```
 
-This is UI state. It is useful, can be checkpointed for resume, and must not become the only copy of durable workflow truth.
+This is program-owned view state. It is useful, can be checkpointed for resume, and must not become
+the only copy of durable workflow truth.
 
 ### Screen Projection
 

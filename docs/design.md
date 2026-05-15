@@ -1,6 +1,9 @@
 # Design Docs: Durable Server Programs
 
-This is the entrypoint for the second-stage design docs. The project explores webapps as durable server programs: browser events become typed program inputs, inputs enter a server program, effects update durable domain resources, UI events update UI state, and projections stream back through a React-compatible adapter.
+This is the entrypoint for the second-stage design docs. The project explores workflow-heavy webapps
+as durable server programs: typed inputs enter a server program, Effect transactions update or
+invalidate durable resources, server-observed UI events update `UIState`, projections stream back
+through a React-compatible adapter, and traces explain why the UI changed.
 
 For the full design context, start with [docs/design/README.md](design/README.md).
 
@@ -15,6 +18,8 @@ The first vertical-slice implementation boundary is locked in [docs/prototype-pl
 
 The current implemented pivot is recorded in [docs/stage-8-record.md](stage-8-record.md). The
 review that drove it is [docs/framework-state-review-5.md](framework-state-review-5.md). The
-current direction review for patch protocol, routing/layouts, Bun-native dev DX, and API syntax is
+the direction review for patch protocol, routing/layouts, Bun-native dev DX, and API syntax is
 [docs/framework-state-review-6.md](framework-state-review-6.md). The implementation record for
-that work is [docs/stage-9-record.md](stage-9-record.md).
+that work is [docs/stage-9-record.md](stage-9-record.md). The current semantic hardening record for
+program-owned state, renderer-owned state, resource cache scopes, and trace-first positioning is
+[docs/framework-state-review-7.md](framework-state-review-7.md).

@@ -21,16 +21,18 @@ That split is familiar, but it turns one product into several loosely synchroniz
 This framework explores a different shape:
 
 ```txt
-browser event
--> typed program input
--> server program
--> effect transaction
--> resource changes
--> recomputed projection
--> streamed UI patch
+typed input
+-> Effect transaction
+-> resource invalidation
+-> projection recomputation
+-> streamed patch/update
+-> causal trace
 ```
 
-The browser should not primarily "call APIs" inside the same app. It should send typed inputs into a fullstack program. The program runs typed effects, updates durable resources, updates view/UI state when appropriate, and streams changes to the browser.
+The browser should not primarily call a handwritten request/response API layer for app state inside
+the same app. It should send typed inputs into a fullstack program. The program runs typed effects,
+updates durable resources, updates server-observed view/UI state when appropriate, streams changes
+to the browser, and records why the UI changed.
 
 React stays important, but as a rendering adapter and ecosystem bridge. The framework kernel should own the fullstack runtime model: actions, UI events, resource events, system events, resources, view checkpoints, projections, streams, and traces.
 
@@ -47,7 +49,9 @@ This is most interesting for webapps where the UI is a live projection of server
 - dashboards with live actions
 - collaborative or multiplayer-ish productivity tools
 
-These apps often have permissions, long-running work, shared state, audit trails, live updates, and server-owned workflows. They are a bad match for architecture where the frontend independently owns too much state and talks to the backend through loosely related endpoints.
+These apps often have permissions, long-running work, shared state, audit trails, live updates, and
+server-owned workflows. They are a bad match for architecture where workflow state is smeared across
+React state, client caches, API handlers, background job polling, WebSocket glue, and logs.
 
 This is less interesting for mostly static sites, marketing pages, simple content apps, or basic CRUD where existing frameworks already provide enough value.
 
@@ -107,24 +111,55 @@ An action should be able to say:
 - what trace events it produced
 - what optimistic or pending state may be shown
 
+### State Ownership
+
+The public state model is not three equal app-state tiers. It is two ownership domains:
+
+```txt
+Program-owned state
+Renderer-owned state
+```
+
+Protocol state is a separate runtime/adapter concern.
+
+Program-owned state is visible to the server program. It can affect projection, resume,
+authorization, sharing, collaboration, traces, or server-side resource reads.
+
+Renderer-owned state lives outside the program. It may use React state, DOM state, or third-party
+widget state, but it must be disposable. Losing it must not affect workflow truth, projection
+correctness, resume behavior, authorization, sharing, traceability, or server resource reads.
+
+Protocol state exists so the adapter and runtime can communicate. Optimistic overlays, pending
+input IDs, cursors, reconnect state, and action lifecycle status are protocol machinery, not app
+truth.
+
 ### UI State And UI Event
 
-`UIState` is view/editing context. It is not a weak exception to the model; it is the second state tier.
+`UIState` is program-owned view/editing context. It is not a weak exception to the model; it is the
+server-observed state the program uses to project a user's current view.
 
 Examples:
 
 - selected row
 - open panel
 - draft mode
-- filter text
+- filter text that affects server reads, resume, sharing, or trace policy
 - active timeline tab
 - trace panel visibility
 
-`UIEvent` updates UI state. It may cause projection recomputation, but it must not mutate domain truth. If a value is application-level view or editing context, it belongs in UI state. If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state, it belongs in domain state.
+`UIEvent` updates program-owned view state. It may cause projection recomputation, but it must not
+mutate domain truth. If a value is view or editing context that the program must observe, it belongs
+in `UIState`. If losing it corrupts workflow truth, permissions, sharing, audit, or durable process
+state, it belongs in domain state.
 
-UI state is the framework's app-level `useState`. React local state is not a third application state tier. It remains valid inside adapters and components for render mechanics the program should not observe: focus, element measurement, hover, pointer position, animation phase, or third-party widget internals.
+Renderer-owned state is outside the program. It remains valid inside adapters and components for
+interaction mechanics the program should not observe: focus, element measurement, hover, pointer
+position, animation phase, uncontrolled input composition before commit, or third-party widget
+internals.
 
-Optimistic UI is also not a third source of truth. It is a temporary projection overlay tied to a typed input. The adapter can show the optimistic projection immediately, then confirm or roll it back when server projection patches, action results, and traces arrive.
+Optimistic UI is also not a source of app truth. It is protocol state: a temporary projection
+overlay tied to a typed input. The adapter can show the optimistic projection immediately, then
+confirm or roll it back when server projection patches, action results, and traces arrive.
 
 UI state can be checkpointed for resume and should be promoted to domain state when it becomes product truth.
 
@@ -169,6 +204,36 @@ Resources can represent:
 - long-running process state, such as an AI run
 
 Resources replace scattered fetches as the default data model. A screen observes resources. Actions invalidate resources. The runtime owns refresh, recomputation, subscriptions, and patch delivery.
+
+### Resource Cache Scope
+
+A resource key has a base identity such as `PendingDeployments(teamId)`. That base identity is not
+always enough for caching. If a resource value changes depending on the current principal, tenant,
+team, or permission context, then caching only by `resource type + id` can reuse the wrong value.
+
+The target design is declaration-level resource cache scope.
+
+Built-in target scopes:
+
+- `global`: the resource has the same value for every reader.
+- `fanout`: the value varies by fanout scope, such as tenant or team.
+- `principal`: the value varies by current principal; missing principal resolves to an explicit
+  anonymous scope.
+- `custom`: the value varies by an app-defined function of invocation context and resource params.
+
+Scoped resource identity is:
+
+```txt
+resource type + base id + resolved scope
+```
+
+Invalidation should start broad. Invalidating a base resource key refreshes all observed scoped
+variants of that base identity. Exact-scope invalidation can be added later for high-volume
+resources, but the first contract should favor correctness: action authors usually know which
+domain resource changed, not every viewer-specific cache entry that observed it.
+
+Browser-safe traces should not expose raw principal or secret scope tokens. Dev traces may include
+fuller scope diagnostics.
 
 ### View Context
 
