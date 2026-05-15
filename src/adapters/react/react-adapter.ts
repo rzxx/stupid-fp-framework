@@ -25,6 +25,13 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
   };
 };
 
+export type OptimisticProjectionUpdate<TProjection> = (projection: TProjection) => TProjection;
+
+export type OptimisticInputOptions<TProjection> = {
+  optimistic?: OptimisticProjectionUpdate<TProjection>;
+  settle?: "projection" | "result";
+};
+
 export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
   connection: {
     status: ConnectionState;
@@ -42,7 +49,11 @@ export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
   traces: {
     visible: TTrace[];
   };
+  ui: {
+    send: (input: TInput, options?: OptimisticInputOptions<TProjection>) => void;
+  };
   actions: {
+    run: (input: TInput, options?: OptimisticInputOptions<TProjection>) => void;
     pendingInputs: Record<string, TInput>;
     lastLifecycle: ActionLifecycleEnvelope | null;
     lastResult: ActionResultEnvelope | null;
@@ -53,8 +64,13 @@ export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
   diagnostics: {
     lastPatch: ProjectionPatchEnvelope | null;
   };
-  send: (input: TInput) => void;
+  send: (input: TInput, options?: OptimisticInputOptions<TProjection>) => void;
   navigate: (path: string, options?: { replace?: boolean }) => void;
+};
+
+type OptimisticProjectionEntry<TProjection> = {
+  update: OptimisticProjectionUpdate<TProjection>;
+  settle: "projection" | "result";
 };
 
 export function useProgramStream<TInput, TProjection, TTrace extends { traceId: string }>(
@@ -68,6 +84,11 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
   const [projection, setProjection] = useState<TProjection | null>(
     options.bootstrap?.projection ?? null,
   );
+  const confirmedProjectionRef = useRef<TProjection | null>(options.bootstrap?.projection ?? null);
+  const optimisticProjectionRef = useRef<Record<string, OptimisticProjectionEntry<TProjection>>>(
+    {},
+  );
+  const optimisticOrderRef = useRef<string[]>([]);
   const [projectionVersion, setProjectionVersion] = useState(
     options.bootstrap?.projectionVersion ?? 0,
   );
@@ -107,6 +128,7 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
           }
 
           const pendingCount = Object.keys(pendingInputsRef.current).length;
+          clearOptimisticProjection();
 
           if (pendingCount === 0) {
             return;
@@ -125,7 +147,8 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
           setResume(nextResume);
         },
         onProjection(envelope) {
-          setProjection(envelope.projection);
+          dropProjectionSettledOptimism();
+          publishProjection(envelope.projection);
           setProjectionVersion(envelope.projectionVersion);
           setCursor(envelope.cursor);
 
@@ -146,37 +169,38 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
             return;
           }
 
-          setProjection((current) => {
-            if (!current) {
-              setLastError({
-                type: "error",
-                viewId: envelope.viewId,
-                message: "Cannot apply projection patch before projection is available",
-              });
-              return current;
-            }
+          const confirmed = confirmedProjectionRef.current;
 
-            let next: TProjection;
+          if (!confirmed) {
+            setLastError({
+              type: "error",
+              viewId: envelope.viewId,
+              message: "Cannot apply projection patch before projection is available",
+            });
+            return;
+          }
 
-            try {
-              next = patchProjection(current, envelope);
-            } catch (error) {
-              setLastError({
-                type: "error",
-                viewId: envelope.viewId,
-                message:
-                  error instanceof Error ? error.message : "Failed to apply projection patch",
-              });
-              return current;
-            }
+          let next: TProjection;
 
-            if (projectionTraces) {
-              setTraces((traces) => mergeTraces(traces, projectionTraces(next)));
-            }
+          try {
+            next = patchProjection(confirmed, envelope);
+          } catch (error) {
+            setLastError({
+              type: "error",
+              viewId: envelope.viewId,
+              message: error instanceof Error ? error.message : "Failed to apply projection patch",
+            });
+            return;
+          }
 
-            setProjectionVersion(envelope.projectionVersion);
-            return next;
-          });
+          dropProjectionSettledOptimism();
+          publishProjection(next);
+
+          if (projectionTraces) {
+            setTraces((traces) => mergeTraces(traces, projectionTraces(next)));
+          }
+
+          setProjectionVersion(envelope.projectionVersion);
         },
         onTrace(envelope) {
           setCursor(envelope.cursor);
@@ -191,6 +215,12 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
           setLastResult(envelope);
 
           if (envelope.clientInputId) {
+            if (!envelope.ok) {
+              removeOptimisticProjection(envelope.clientInputId);
+            } else {
+              removeResultSettledOptimism(envelope.clientInputId);
+            }
+
             setPendingInputs((current) => {
               const next = { ...current };
               delete next[envelope.clientInputId as string];
@@ -236,7 +266,15 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
     traces: {
       visible: traces,
     },
+    ui: {
+      send(input, sendOptions) {
+        sendProgramInput(input, sendOptions, false);
+      },
+    },
     actions: {
+      run(input, actionOptions) {
+        sendProgramInput(input, actionOptions, true);
+      },
       pendingInputs,
       lastLifecycle,
       lastResult,
@@ -247,16 +285,8 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
     diagnostics: {
       lastPatch,
     },
-    send(input) {
-      const clientInputId = stream.current?.send(input);
-
-      if (clientInputId) {
-        setPendingInputs((current) => {
-          const next = { ...current, [clientInputId]: input };
-          pendingInputsRef.current = next;
-          return next;
-        });
-      }
+    send(input, sendOptions) {
+      sendProgramInput(input, sendOptions, false);
     },
     navigate(path, navigateOptions) {
       if (options.router?.mode === "history") {
@@ -272,6 +302,116 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
       });
     },
   };
+
+  function sendProgramInput(
+    input: TInput,
+    inputOptions: OptimisticInputOptions<TProjection> | undefined,
+    trackPending: boolean,
+  ): void {
+    const clientInputId = stream.current?.send(input);
+
+    if (!clientInputId) {
+      return;
+    }
+
+    if (inputOptions?.optimistic) {
+      addOptimisticProjection(clientInputId, {
+        update: inputOptions.optimistic,
+        settle: inputOptions.settle ?? (trackPending ? "result" : "projection"),
+      });
+    }
+
+    if (trackPending) {
+      setPendingInputs((current) => {
+        const next = { ...current, [clientInputId]: input };
+        pendingInputsRef.current = next;
+        return next;
+      });
+    }
+  }
+
+  function addOptimisticProjection(
+    clientInputId: string,
+    entry: OptimisticProjectionEntry<TProjection>,
+  ): void {
+    optimisticProjectionRef.current = {
+      ...optimisticProjectionRef.current,
+      [clientInputId]: entry,
+    };
+    optimisticOrderRef.current = [...optimisticOrderRef.current, clientInputId];
+    republishOptimisticProjection();
+  }
+
+  function removeOptimisticProjection(clientInputId: string): void {
+    if (!optimisticProjectionRef.current[clientInputId]) {
+      return;
+    }
+
+    const next = { ...optimisticProjectionRef.current };
+    delete next[clientInputId];
+    optimisticProjectionRef.current = next;
+    optimisticOrderRef.current = optimisticOrderRef.current.filter((id) => id !== clientInputId);
+    republishOptimisticProjection();
+  }
+
+  function removeResultSettledOptimism(clientInputId: string): void {
+    if (optimisticProjectionRef.current[clientInputId]?.settle !== "result") {
+      return;
+    }
+
+    removeOptimisticProjection(clientInputId);
+  }
+
+  function dropProjectionSettledOptimism(): void {
+    const next = { ...optimisticProjectionRef.current };
+    let changed = false;
+
+    for (const [clientInputId, entry] of Object.entries(next)) {
+      if (entry.settle === "projection") {
+        delete next[clientInputId];
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    optimisticProjectionRef.current = next;
+    optimisticOrderRef.current = optimisticOrderRef.current.filter((id) => next[id]);
+  }
+
+  function clearOptimisticProjection(): void {
+    if (optimisticOrderRef.current.length === 0) {
+      return;
+    }
+
+    optimisticProjectionRef.current = {};
+    optimisticOrderRef.current = [];
+    republishOptimisticProjection();
+  }
+
+  function publishProjection(nextConfirmed: TProjection): void {
+    confirmedProjectionRef.current = nextConfirmed;
+    setProjection(applyOptimisticProjection(nextConfirmed));
+  }
+
+  function republishOptimisticProjection(): void {
+    const confirmed = confirmedProjectionRef.current;
+
+    if (!confirmed) {
+      return;
+    }
+
+    setProjection(applyOptimisticProjection(confirmed));
+  }
+
+  function applyOptimisticProjection(confirmed: TProjection): TProjection {
+    return optimisticOrderRef.current.reduce((current, clientInputId) => {
+      const entry = optimisticProjectionRef.current[clientInputId];
+      return entry ? entry.update(current) : current;
+    }, confirmed);
+  }
 }
 
 function mergeTrace<TTrace extends { traceId: string }>(current: TTrace[], next: TTrace): TTrace[] {
