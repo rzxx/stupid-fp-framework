@@ -1,4 +1,4 @@
-import { createRuntime, defineProgram, type RuntimeStore } from "../../framework";
+import { createRuntime, Program, type RuntimeStore } from "../../framework";
 import { approvalActions } from "./actions";
 import { approvalResources } from "./resources";
 import { approvalScreens } from "./screen";
@@ -23,19 +23,13 @@ export function createApprovalProgram(options?: {
   const services =
     options?.services ?? createApprovalServices({ currentUserId: options?.currentUserId });
 
-  return defineProgram<
-    ApprovalEnvironment,
-    ApprovalUIState,
-    ApprovalUIEvent,
-    ApprovalActionInput,
-    ApprovalProjection
-  >({
-    layer: createApprovalLayer(services),
-    resources: approvalResources,
-    uiState: approvalUIState,
-    screens: approvalScreens,
-    actions: approvalActions,
-  });
+  return Program.define("approvals")
+    .layer<ApprovalEnvironment>(createApprovalLayer(services))
+    .resources(...approvalResources)
+    .ui<ApprovalUIState, ApprovalUIEvent>(approvalUIState)
+    .screens<ApprovalProjection>(...approvalScreens)
+    .actions<ApprovalActionInput>(...approvalActions)
+    .build();
 }
 
 export function createApprovalRuntime(options?: {

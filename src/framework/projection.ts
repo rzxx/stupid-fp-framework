@@ -1,7 +1,7 @@
 import type { Effect } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
 import type { ResourceFailure, ResourceGraph } from "./resource";
-import type { RouteDefinition } from "./route";
+import { defineRoute, type RouteDefinition } from "./route";
 import type { ViewContext } from "./view";
 import type { TraceReader } from "./trace";
 
@@ -72,6 +72,66 @@ export const Layout = {
     return { id };
   },
 };
+
+export const Screen = {
+  define(id: string) {
+    return new ScreenBuilder(id);
+  },
+};
+
+class ScreenBuilder<R = never, TUIState = never, TProjection = never> {
+  readonly #id: string;
+  #route: string | RouteDefinition | null = null;
+  #layout: LayoutDefinition | undefined;
+  #patchManifest: ProjectionPatchManifest<TProjection> | undefined;
+
+  constructor(id: string) {
+    this.#id = id;
+  }
+
+  route<TParams extends Record<string, string>>(
+    pattern: string,
+    options: { params: RouteDefinition<TParams>["params"] },
+  ): ScreenBuilder<R, TUIState, TProjection> {
+    this.#route = defineRoute(pattern, { id: this.#id, params: options.params });
+    return this;
+  }
+
+  routeDefinition(route: string | RouteDefinition): ScreenBuilder<R, TUIState, TProjection> {
+    this.#route = route;
+    return this;
+  }
+
+  layout(layout: LayoutDefinition): ScreenBuilder<R, TUIState, TProjection> {
+    this.#layout = layout;
+    return this;
+  }
+
+  patchManifest<TNextProjection>(
+    manifest: ProjectionPatchManifest<TNextProjection>,
+  ): ScreenBuilder<R, TUIState, TNextProjection> {
+    this.#patchManifest = manifest as unknown as ProjectionPatchManifest<TProjection>;
+    return this as unknown as ScreenBuilder<R, TUIState, TNextProjection>;
+  }
+
+  project<TR, TNextUIState, TNextProjection>(
+    project: (
+      view: ViewContext<TNextUIState>,
+      context: ProjectionContext<TR>,
+    ) => Effect.Effect<TNextProjection, ProjectionFailure | ResourceFailure, TR>,
+  ): ScreenDefinition<TR, TNextUIState, TNextProjection> {
+    if (!this.#route) {
+      throw new Error(`Screen ${this.#id} must define a route before project()`);
+    }
+
+    return {
+      route: this.#route,
+      layout: this.#layout,
+      patchManifest: this.#patchManifest as unknown as ProjectionPatchManifest<TNextProjection>,
+      project,
+    };
+  }
+}
 
 export type ProjectionEnvelopeData<TProjection> = {
   projectionVersion: number;

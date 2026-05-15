@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createApprovalRuntime } from "../src/demo/approvals/program";
-import { ActiveDeploymentRuns } from "../src/demo/approvals/resources";
+import { ActiveDeploymentRunsResource } from "../src/demo/approvals/resources";
 import { createApprovalServices } from "../src/demo/approvals/services";
 import type { ApprovalProjection } from "../src/demo/approvals/types";
 import type { ProjectionEnvelope, ProjectionPatchEnvelope } from "../src/framework";
@@ -95,7 +95,9 @@ describe("deployment approval workflow", () => {
     const connected = await connect(runtime);
 
     services.runs.advance("run-api-rollout", 88);
-    const result = await runtime.invalidate([ActiveDeploymentRuns("team-platform")]);
+    const result = await runtime.invalidate([
+      ActiveDeploymentRunsResource.key({ teamId: "team-platform" }),
+    ]);
     const patch = latestPatch(result.envelopes);
     const runsValue = patch.patch.regions.find((region) => region.id === "activeRuns")?.value;
     const runs = Array.isArray(runsValue) ? runsValue : [];

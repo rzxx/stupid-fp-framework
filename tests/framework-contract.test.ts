@@ -16,13 +16,17 @@ import {
   Layer,
   MemoryRuntimeStore,
   parseClientEnvelope,
+  Program,
+  Resource,
   ResourceGraph,
   Route,
+  Screen,
   resourceKey,
   Schema,
   UIState,
   type ProjectionEnvelope,
   type ProjectionPatchEnvelope,
+  type ProjectionContext,
   type FrameworkPlugin,
   type RuntimeStoreCapabilities,
   RuntimeStoreError,
@@ -32,6 +36,7 @@ import {
   type TraceSnapshot,
   TraceStore,
   type ViewCheckpoint,
+  type ViewContext,
 } from "../src/framework";
 
 type Services = {
@@ -179,6 +184,56 @@ describe("framework contract", () => {
     const projection = latestProjection(result.envelopes).projection;
     expect(projection.route).toBe("/contract/:id");
     expect(projection.params).toEqual({ id: "main" });
+  });
+
+  test("named builder APIs compose resources UI state screens and programs", async () => {
+    const BuiltCounter = Resource.define("BuiltCounter")
+      .value<number>()
+      .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
+        id: (params) => params.id,
+      })
+      .load<TestEnvironment>(() => Effect.map(CounterService, (counter) => counter.value));
+    const builtUI = UIState.define("built.ui")
+      .init<UIState>(() => ({ selected: false }))
+      .event<UIEvent>("view.toggle", toggleSchema, (state) => ({
+        selected: !state.selected,
+      }))
+      .build();
+    const builtScreen = Screen.define("built.counter")
+      .route("/built/:id", { params: Schema.Struct({ id: Schema.String }) })
+      .project((view: ViewContext<UIState>, context: ProjectionContext<TestEnvironment>) =>
+        Effect.gen(function* () {
+          const projection: Projection = {
+            route: view.route,
+            params: view.params,
+            selected: view.ui.selected,
+            count: yield* context.region("counter", () =>
+              context.resources.read(BuiltCounter.key({ id: view.params.id as string })),
+            ),
+            traceIds: [],
+          };
+
+          return projection;
+        }),
+      );
+    const runtime = createRuntime(
+      Program.define("built")
+        .layer<TestEnvironment>(createServicesLayer(createServices()))
+        .resources(BuiltCounter)
+        .ui<UIState, UIEvent>(builtUI)
+        .screens<Projection>(builtScreen)
+        .build(),
+    );
+    const result = await runtime.connect({
+      type: "connect",
+      route: "/built/main",
+      params: {},
+    });
+
+    expect(latestProjection(result.envelopes).projection).toMatchObject({
+      route: "/built/:id",
+      count: 0,
+    });
   });
 
   test("invalidated resources map back to observed projection regions", async () => {

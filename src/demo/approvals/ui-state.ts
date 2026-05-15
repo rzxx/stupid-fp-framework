@@ -1,35 +1,32 @@
 import { Schema, UIState, type UIStateDefinition } from "../../framework";
 import type { ApprovalUIEvent, ApprovalUIState } from "./types";
 
-export const approvalUIState: UIStateDefinition<ApprovalUIState, ApprovalUIEvent> = UIState.define<
-  ApprovalUIState,
-  ApprovalUIEvent
->({
-  init: () => ({
+export const approvalUIState: UIStateDefinition<ApprovalUIState, ApprovalUIEvent> = UIState.define(
+  "approval.ui",
+)
+  .init<ApprovalUIState>(() => ({
     selectedDeploymentId: null,
     tracePanelOpen: true,
-  }),
-  events: [
-    {
-      type: "ui.deployment.select",
-      schema: Schema.Struct({
-        type: Schema.Literal("ui.deployment.select"),
-        deploymentId: Schema.String,
-      }),
-      update: (state, event: Extract<ApprovalUIEvent, { type: "ui.deployment.select" }>) => ({
-        ...state,
-        selectedDeploymentId: event.deploymentId,
-      }),
-    },
-    {
-      type: "ui.trace.toggle",
-      schema: Schema.Struct({
-        type: Schema.Literal("ui.trace.toggle"),
-      }),
-      update: (state) => ({
-        ...state,
-        tracePanelOpen: !state.tracePanelOpen,
-      }),
-    },
-  ],
-});
+  }))
+  .event<Extract<ApprovalUIEvent, { type: "ui.deployment.select" }>>(
+    "ui.deployment.select",
+    Schema.Struct({
+      type: Schema.Literal("ui.deployment.select"),
+      deploymentId: Schema.String,
+    }),
+    (state, event) => ({
+      ...state,
+      selectedDeploymentId: event.deploymentId,
+    }),
+  )
+  .event<Extract<ApprovalUIEvent, { type: "ui.trace.toggle" }>>(
+    "ui.trace.toggle",
+    Schema.Struct({
+      type: Schema.Literal("ui.trace.toggle"),
+    }),
+    (state) => ({
+      ...state,
+      tracePanelOpen: !state.tracePanelOpen,
+    }),
+  )
+  .build();

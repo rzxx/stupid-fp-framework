@@ -8,6 +8,7 @@ export type ResourceKey<TValue = unknown> = {
   readonly type: string;
   readonly id: string;
   readonly label: string;
+  readonly params?: unknown;
   readonly __value?: TValue;
 };
 
@@ -52,8 +53,9 @@ export function resourceKey<TValue>(
   type: string,
   id: string,
   label = `${type}(${id})`,
+  params?: unknown,
 ): ResourceKey<TValue> {
-  return { type, id, label };
+  return { type, id, label, params };
 }
 
 export function serializeResourceKey(key: ResourceKey): SerializedResourceKey {
@@ -77,6 +79,57 @@ export function defineResource<R, TValue>(
   load: ResourceLoader<R, TValue>,
 ): ResourceDefinition<R, TValue> {
   return { type, load };
+}
+
+export type ResourceDeclaration<R, TParams, TValue> = ResourceDefinition<R, TValue> & {
+  key: (params: TParams) => ResourceKey<TValue>;
+};
+
+export const Resource = {
+  define<TType extends string>(type: TType) {
+    return new ResourceBuilder<unknown>(type);
+  },
+};
+
+class ResourceBuilder<TValue> {
+  readonly #type: string;
+
+  constructor(type: string) {
+    this.#type = type;
+  }
+
+  value<TNextValue>(): ResourceBuilder<TNextValue> {
+    return new ResourceBuilder<TNextValue>(this.#type);
+  }
+
+  key<TParams>(
+    _schema: unknown,
+    options: {
+      id: (params: TParams) => string;
+      label?: (params: TParams) => string;
+    },
+  ) {
+    return {
+      load: <R>(
+        load: (
+          params: TParams,
+          key: ResourceKey<TValue>,
+        ) => Effect.Effect<TValue, ResourceFailure, R>,
+      ): ResourceDeclaration<R, TParams, TValue> => ({
+        type: this.#type,
+        key: (params) => {
+          const id = options.id(params);
+          return resourceKey(
+            this.#type,
+            id,
+            options.label?.(params) ?? `${this.#type}(${id})`,
+            params,
+          );
+        },
+        load: (key) => load(key.params as TParams, key as ResourceKey<TValue>),
+      }),
+    };
+  }
 }
 
 export class ResourceGraph<R> {

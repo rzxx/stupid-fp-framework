@@ -1,5 +1,5 @@
 import { Action, actionFailure, Effect, Schema, type ActionDefinition } from "../../framework";
-import { AuditTrail, Deployment, PendingDeployments } from "./resources";
+import { AuditTrailResource, DeploymentResource, PendingDeploymentsResource } from "./resources";
 import { Audit, Auth, Clock, Deployments, type ApprovalEnvironment } from "./services";
 import type { ApprovalActionInput } from "./types";
 
@@ -97,9 +97,9 @@ export const approveDeploymentAction: ActionDefinition<
         deploymentId: deployment.id,
       });
 
-      context.invalidate(Deployment(deployment.id));
-      context.invalidate(PendingDeployments(deployment.teamId));
-      context.invalidate(AuditTrail(deployment.id));
+      context.invalidate(DeploymentResource.key({ deploymentId: deployment.id }));
+      context.invalidate(PendingDeploymentsResource.key({ teamId: deployment.teamId }));
+      context.invalidate(AuditTrailResource.key({ deploymentId: deployment.id }));
 
       return { deploymentId: deployment.id, status: "approved" as const };
     }),

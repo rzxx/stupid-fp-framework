@@ -1,13 +1,18 @@
 import {
   Effect,
   Layout,
-  Route,
+  Screen,
   Schema,
   type ProjectionContext,
   type ScreenDefinition,
 } from "../../framework";
 import { approvalProjectionPatchManifest } from "./projection-manifest";
-import { ActiveDeploymentRuns, AuditTrail, Deployment, PendingDeployments } from "./resources";
+import {
+  ActiveDeploymentRunsResource,
+  AuditTrailResource,
+  DeploymentResource,
+  PendingDeploymentsResource,
+} from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
 import type {
   ApprovalProjection,
@@ -27,19 +32,20 @@ export const approvalDeploymentsScreen: ScreenDefinition<
   ApprovalEnvironment,
   ApprovalUIState,
   ApprovalProjection
-> = {
-  layout: operationsLayout,
-  route: Route.define("/teams/:teamId/deployments", {
+> = Screen.define("approval.deployments")
+  .layout(operationsLayout)
+  .route("/teams/:teamId/deployments", {
     params: teamRouteParams,
-  }),
-  patchManifest: approvalProjectionPatchManifest,
-  project(view, context) {
+  })
+  .patchManifest(approvalProjectionPatchManifest)
+  .project((view, context) => {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;
       const layout = yield* approvalLayout(view, context);
       const pendingDeployments = yield* context.region("pendingDeployments", () =>
-        Effect.map(context.resources.read(PendingDeployments(teamId)), (deployments) =>
-          deployments.map(summary),
+        Effect.map(
+          context.resources.read(PendingDeploymentsResource.key({ teamId })),
+          (deployments) => deployments.map(summary),
         ),
       );
       const activeRuns = yield* activeRunsRegion(teamId, context);
@@ -49,7 +55,7 @@ export const approvalDeploymentsScreen: ScreenDefinition<
           )
         : null;
 
-      return {
+      const projection: ApprovalProjection = {
         ...layout,
         route: "/teams/:teamId/deployments",
         page: "deployments",
@@ -57,27 +63,28 @@ export const approvalDeploymentsScreen: ScreenDefinition<
         selectedDeployment,
         activeRuns,
       };
+
+      return projection;
     });
-  },
-};
+  });
 
 export const approvalRunsScreen: ScreenDefinition<
   ApprovalEnvironment,
   ApprovalUIState,
   ApprovalProjection
-> = {
-  layout: operationsLayout,
-  route: Route.define("/teams/:teamId/runs", {
+> = Screen.define("approval.runs")
+  .layout(operationsLayout)
+  .route("/teams/:teamId/runs", {
     params: teamRouteParams,
-  }),
-  patchManifest: approvalProjectionPatchManifest,
-  project(view, context) {
+  })
+  .patchManifest(approvalProjectionPatchManifest)
+  .project((view, context) => {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;
       const layout = yield* approvalLayout(view, context);
       const activeRuns = yield* activeRunsRegion(teamId, context);
 
-      return {
+      const projection: ApprovalProjection = {
         ...layout,
         route: "/teams/:teamId/runs",
         page: "runs",
@@ -85,9 +92,10 @@ export const approvalRunsScreen: ScreenDefinition<
         selectedDeployment: null,
         activeRuns,
       };
+
+      return projection;
     });
-  },
-};
+  });
 
 export const approvalScreens = [approvalDeploymentsScreen, approvalRunsScreen];
 
@@ -123,7 +131,7 @@ function approvalLayout(
 
 function activeRunsRegion(teamId: string, context: ProjectionContext<ApprovalEnvironment>) {
   return context.region("activeRuns", () =>
-    Effect.map(context.resources.read(ActiveDeploymentRuns(teamId)), (runs) =>
+    Effect.map(context.resources.read(ActiveDeploymentRunsResource.key({ teamId })), (runs) =>
       runs.map(runSummary),
     ),
   );
@@ -131,13 +139,13 @@ function activeRunsRegion(teamId: string, context: ProjectionContext<ApprovalEnv
 
 function selectedDetail(deploymentId: string, context: ProjectionContext<ApprovalEnvironment>) {
   return Effect.gen(function* () {
-    const deployment = yield* context.resources.read(Deployment(deploymentId));
+    const deployment = yield* context.resources.read(DeploymentResource.key({ deploymentId }));
 
     if (!deployment) {
       return null;
     }
 
-    const auditTrail = yield* context.resources.read(AuditTrail(deploymentId));
+    const auditTrail = yield* context.resources.read(AuditTrailResource.key({ deploymentId }));
 
     return detail(deployment, auditTrail);
   });

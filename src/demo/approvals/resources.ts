@@ -1,52 +1,69 @@
-import {
-  defineResource,
-  Effect,
-  resourceKey,
-  type ResourceDefinition,
-  type ResourceKey,
-} from "../../framework";
+import { Effect, Resource, Schema, type ResourceDefinition } from "../../framework";
 import { Audit, DeploymentRuns, Deployments, type ApprovalEnvironment } from "./services";
 import type { AuditEntry, Deployment, DeploymentRun } from "./types";
 
-export function PendingDeployments(teamId: string): ResourceKey<Deployment[]> {
-  return resourceKey("PendingDeployments", teamId, `PendingDeployments(${teamId})`);
-}
+type TeamResourceParams = {
+  teamId: string;
+};
 
-export function Deployment(deploymentId: string): ResourceKey<Deployment | undefined> {
-  return resourceKey("Deployment", deploymentId, `Deployment(${deploymentId})`);
-}
+type DeploymentResourceParams = {
+  deploymentId: string;
+};
 
-export function AuditTrail(deploymentId: string): ResourceKey<AuditEntry[]> {
-  return resourceKey("AuditTrail", deploymentId, `AuditTrail(${deploymentId})`);
-}
+const teamParams = Schema.Struct({ teamId: Schema.String });
+const deploymentParams = Schema.Struct({ deploymentId: Schema.String });
 
-export function ActiveDeploymentRuns(teamId: string): ResourceKey<DeploymentRun[]> {
-  return resourceKey("ActiveDeploymentRuns", teamId, `ActiveDeploymentRuns(${teamId})`);
-}
-
-export const approvalResources: ResourceDefinition<ApprovalEnvironment, unknown>[] = [
-  defineResource("PendingDeployments", (key) =>
+export const PendingDeploymentsResource = Resource.define("PendingDeployments")
+  .value<Deployment[]>()
+  .key<TeamResourceParams>(teamParams, {
+    id: (params) => params.teamId,
+  })
+  .load<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
-      return deployments.pendingForTeam(key.id);
+      return deployments.pendingForTeam(params.teamId);
     }),
-  ),
-  defineResource("Deployment", (key) =>
+  );
+
+export const DeploymentResource = Resource.define("Deployment")
+  .value<Deployment | undefined>()
+  .key<DeploymentResourceParams>(deploymentParams, {
+    id: (params) => params.deploymentId,
+  })
+  .load<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
-      return deployments.find(key.id);
+      return deployments.find(params.deploymentId);
     }),
-  ),
-  defineResource("AuditTrail", (key) =>
+  );
+
+export const AuditTrailResource = Resource.define("AuditTrail")
+  .value<AuditEntry[]>()
+  .key<DeploymentResourceParams>(deploymentParams, {
+    id: (params) => params.deploymentId,
+  })
+  .load<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const audit = yield* Audit;
-      return audit.forDeployment(key.id);
+      return audit.forDeployment(params.deploymentId);
     }),
-  ),
-  defineResource("ActiveDeploymentRuns", (key) =>
+  );
+
+export const ActiveDeploymentRunsResource = Resource.define("ActiveDeploymentRuns")
+  .value<DeploymentRun[]>()
+  .key<TeamResourceParams>(teamParams, {
+    id: (params) => params.teamId,
+  })
+  .load<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const runs = yield* DeploymentRuns;
-      return runs.forTeam(key.id);
+      return runs.forTeam(params.teamId);
     }),
-  ),
+  );
+
+export const approvalResources: ResourceDefinition<ApprovalEnvironment, unknown>[] = [
+  PendingDeploymentsResource,
+  DeploymentResource,
+  AuditTrailResource,
+  ActiveDeploymentRunsResource,
 ];

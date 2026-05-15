@@ -78,6 +78,95 @@ export function defineProgram<
   };
 }
 
+export const Program = {
+  define(id: string) {
+    return new ProgramBuilder(id);
+  },
+};
+
+class ProgramBuilder<
+  R = never,
+  TUIState = never,
+  TUIEvent extends { type: string } = never,
+  TActionInput extends { type: string } = never,
+  TProjection = never,
+> {
+  readonly #id: string;
+  #layer?: Layer.Layer<R>;
+  #resources: ResourceDefinition<R, unknown>[] = [];
+  #uiState?: UIStateDefinition<TUIState, TUIEvent>;
+  #screens: ScreenDefinition<R, TUIState, TProjection>[] = [];
+  #actions: ActionDefinition<R, TActionInput, JsonValue | void>[] = [];
+  #plugins: FrameworkPlugin<R>[] = [];
+
+  constructor(id: string) {
+    this.#id = id;
+  }
+
+  layer<TR>(
+    layer: Layer.Layer<TR>,
+  ): ProgramBuilder<TR, TUIState, TUIEvent, TActionInput, TProjection> {
+    this.#layer = layer as unknown as Layer.Layer<R>;
+    return this as unknown as ProgramBuilder<TR, TUIState, TUIEvent, TActionInput, TProjection>;
+  }
+
+  plugins<TR>(
+    ...plugins: FrameworkPlugin<TR>[]
+  ): ProgramBuilder<TR, TUIState, TUIEvent, TActionInput, TProjection> {
+    this.#plugins = plugins as unknown as FrameworkPlugin<R>[];
+    return this as unknown as ProgramBuilder<TR, TUIState, TUIEvent, TActionInput, TProjection>;
+  }
+
+  resources<TR>(
+    ...resources: ResourceDefinition<TR, unknown>[]
+  ): ProgramBuilder<TR, TUIState, TUIEvent, TActionInput, TProjection> {
+    this.#resources = resources as unknown as ResourceDefinition<R, unknown>[];
+    return this as unknown as ProgramBuilder<TR, TUIState, TUIEvent, TActionInput, TProjection>;
+  }
+
+  ui<TNextUIState, TNextUIEvent extends { type: string }>(
+    uiState: UIStateDefinition<TNextUIState, TNextUIEvent>,
+  ): ProgramBuilder<R, TNextUIState, TNextUIEvent, TActionInput, TProjection> {
+    this.#uiState = uiState as unknown as UIStateDefinition<TUIState, TUIEvent>;
+    return this as unknown as ProgramBuilder<
+      R,
+      TNextUIState,
+      TNextUIEvent,
+      TActionInput,
+      TProjection
+    >;
+  }
+
+  screens<TNextProjection>(
+    ...screens: ScreenDefinition<R, TUIState, TNextProjection>[]
+  ): ProgramBuilder<R, TUIState, TUIEvent, TActionInput, TNextProjection> {
+    this.#screens = screens as unknown as ScreenDefinition<R, TUIState, TProjection>[];
+    return this as unknown as ProgramBuilder<R, TUIState, TUIEvent, TActionInput, TNextProjection>;
+  }
+
+  actions<TNextActionInput extends { type: string }>(
+    ...actions: ActionDefinition<R, TNextActionInput, JsonValue | void>[]
+  ): ProgramBuilder<R, TUIState, TUIEvent, TNextActionInput, TProjection> {
+    this.#actions = actions as unknown as ActionDefinition<R, TActionInput, JsonValue | void>[];
+    return this as unknown as ProgramBuilder<R, TUIState, TUIEvent, TNextActionInput, TProjection>;
+  }
+
+  build(): Program<R, TUIState, TUIEvent, TActionInput, TProjection> {
+    if (!this.#uiState) {
+      throw new Error(`Program ${this.#id} must define UI state before build()`);
+    }
+
+    return defineProgram({
+      layer: this.#layer,
+      plugins: this.#plugins,
+      resources: this.#resources,
+      uiState: this.#uiState,
+      screens: this.#screens,
+      actions: this.#actions,
+    });
+  }
+}
+
 export function screenRoutePattern<R, TUIState, TProjection>(
   screen: ScreenDefinition<R, TUIState, TProjection>,
 ): string {
