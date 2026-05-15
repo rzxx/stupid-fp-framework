@@ -80,7 +80,12 @@ export async function executeAction<R, TInput extends { type: string }>(
   traces: TraceStore,
   trace: TraceSnapshot,
   hooks: ActionHooks<R>[] = [],
+  runEffect?: <A, E, R2>(effect: Effect.Effect<A, E, R2>) => Promise<A>,
 ): Promise<ActionExecution> {
+  const run = <A, E, R2>(effect: Effect.Effect<A, E, R2>) =>
+    runEffect
+      ? runEffect(effect)
+      : runtime.runPromise(effect as unknown as Effect.Effect<A, never, R>);
   const invalidated: ResourceKey[] = [];
   const context: ActionContext = {
     trace,
@@ -104,7 +109,7 @@ export async function executeAction<R, TInput extends { type: string }>(
 
   const actionInput = input as { type: string };
 
-  await runtime.runPromise(
+  await run(
     Effect.forEach(
       hooks,
       (hook) =>
@@ -112,12 +117,12 @@ export async function executeAction<R, TInput extends { type: string }>(
     ),
   );
 
-  const result = await runtime.runPromise(Effect.either(action.run(input, context)));
+  const result = await run(Effect.either(action.run(input, context)));
 
   if (result._tag === "Left") {
     const message = result.left.message;
     traces.fail(trace, message);
-    await runtime.runPromise(
+    await run(
       Effect.forEach(
         hooks,
         (hook) =>
@@ -129,7 +134,7 @@ export async function executeAction<R, TInput extends { type: string }>(
           }) ?? Effect.void,
       ),
     );
-    await runtime.runPromise(
+    await run(
       Effect.forEach(
         hooks,
         (hook) =>
@@ -144,7 +149,7 @@ export async function executeAction<R, TInput extends { type: string }>(
     return { ok: false, error: message, invalidated };
   }
 
-  await runtime.runPromise(
+  await run(
     Effect.forEach(
       hooks,
       (hook) =>

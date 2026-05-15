@@ -1,5 +1,12 @@
 import { executeAction } from "./action";
 import { Effect } from "./effect";
+import {
+  defaultInvocationContext,
+  InvocationContext,
+  type DeliveryIntent,
+  type InvocationContextValue,
+  type InvocationProtocolEvent,
+} from "./invocation";
 import type { JsonValue } from "./json";
 import { actionHooks, resourceHooks, routeHooks, viewHooks, traceHooks } from "./plugin";
 import { screenRouteDefinition, screenRoutePattern, type Program } from "./program";
@@ -22,6 +29,8 @@ import { TraceStore, type TraceSnapshot } from "./trace";
 
 export type RuntimeResult<TProjection> = {
   envelopes: ServerEnvelope<TProjection, TraceSnapshot>[];
+  protocolEvents?: InvocationProtocolEvent[];
+  deliveryIntents?: DeliveryIntent<ServerEnvelope<TProjection, TraceSnapshot>>[];
 };
 
 export type AffectedRegion = {
@@ -47,6 +56,13 @@ export type Runtime<
 
 export type RuntimeOptions<TUIState, TProjection> = {
   store?: RuntimeStore<TUIState, TProjection, TraceSnapshot>;
+  fanoutScope?: (route: string, params: Record<string, string>) => string;
+  invocationContext?: (
+    input:
+      | { type: "connect"; route: string; params: Record<string, string> }
+      | { type: "input"; viewId: string; clientInputId?: string }
+      | { type: "invalidate"; keys: readonly ResourceKey[] },
+  ) => Partial<InvocationContextValue>;
 };
 
 export function createRuntime<
@@ -71,12 +87,13 @@ export function createRuntime<
   async function project(
     viewId: string,
     trace?: TraceSnapshot,
+    invocation = defaultInvocationContext(),
   ): Promise<RuntimeResult<TProjection>> {
-    const computed = await computeProjection(viewId, trace);
+    const computed = await computeProjection(viewId, trace, invocation);
 
     if ("error" in computed) {
       return {
-        envelopes: [computed.error],
+        ...runtimeResult([computed.error]),
       };
     }
 
@@ -92,13 +109,14 @@ export function createRuntime<
     await persistEnvelope(computed.view, envelope);
 
     return {
-      envelopes: [envelope],
+      ...runtimeResult([envelope]),
     };
   }
 
   async function computeProjection(
     viewId: string,
     trace?: TraceSnapshot,
+    invocation = defaultInvocationContext(),
   ): Promise<
     | {
         view: ViewContext<TUIState>;
@@ -134,12 +152,13 @@ export function createRuntime<
 
     try {
       observed = await program.resourceGraph.observe(() =>
-        program.runtime.runPromise(
+        runEffect(
           screen.project(view, {
             resources: program.resourceGraph,
             traces: traces.scoped(viewId),
             region: (id, read) => program.resourceGraph.region(id, read),
           }),
+          invocation,
         ),
       );
     } catch (error) {
@@ -204,24 +223,33 @@ export function createRuntime<
       return affectedRegions(views.list(), keys);
     },
     async invalidate(keys) {
-      await restoreCheckpointedViews();
-      return refreshAffectedViews(keys);
+      const invocation = resolveInvocationContext({ type: "invalidate", keys });
+      return refreshAffectedViews(keys, undefined, invocation);
     },
 
     async connect(envelope) {
+      const invocation = resolveInvocationContext({
+        type: "connect",
+        route: envelope.route,
+        params: envelope.params,
+      });
       const resolved = await resolveRoute(envelope.route, envelope.params);
       const connectRoute = resolved ?? {
         route: envelope.route,
         params: envelope.params,
       };
-      await restoreCheckpointedViews();
+      invocation.fanoutScope = scopedFanout(connectRoute.route, connectRoute.params, invocation);
       const resume = envelope.resume
         ? await resolveResume(connectRoute.route, connectRoute.params, envelope.resume)
         : null;
+      await restoreCheckpointedViews();
       const view = resume?.snapshot
         ? views.restore(resume.snapshot)
-        : views.create(connectRoute.route, connectRoute.params);
-      await runViewHooks(resume?.snapshot ? "restore" : "create", view);
+        : views.create(connectRoute.route, connectRoute.params, {
+            fanoutScope: invocation.fanoutScope,
+          });
+      view.fanoutScope = invocation.fanoutScope;
+      await runViewHooks(resume?.snapshot ? "restore" : "create", view, invocation);
       const connected: ServerEnvelope<TProjection, TraceSnapshot> = {
         type: "connected",
         viewId: view.viewId,
@@ -235,34 +263,36 @@ export function createRuntime<
         const replay =
           resume.replay[0]?.type === "projection:update"
             ? resume.replay
-            : [...(await project(view.viewId)).envelopes, ...resume.replay];
+            : [...(await project(view.viewId, undefined, invocation)).envelopes, ...resume.replay];
 
-        return {
-          envelopes: [connected, ...replay],
-        };
+        return runtimeResult([connected, ...replay]);
       }
 
-      const initial = await project(view.viewId);
+      const initial = await project(view.viewId, undefined, invocation);
 
-      return {
-        envelopes: [connected, ...initial.envelopes],
-      };
+      return runtimeResult([connected, ...initial.envelopes]);
     },
 
     async receive(envelope) {
+      const invocation = resolveInvocationContext({
+        type: "input",
+        viewId: envelope.viewId,
+        clientInputId: envelope.clientInputId,
+      });
       const view = views.get(envelope.viewId) ?? (await restoreViewForReceive(envelope.viewId));
 
       if (!view) {
-        return {
-          envelopes: [
-            {
-              type: "error",
-              viewId: envelope.viewId,
-              message: "Unknown view",
-            },
-          ],
-        };
+        return runtimeResult([
+          {
+            type: "error",
+            viewId: envelope.viewId,
+            message: "Unknown view",
+          },
+        ]);
       }
+
+      invocation.fanoutScope = view.fanoutScope;
+      invocation.clientInputId = envelope.clientInputId;
 
       const trace = traces.start(envelope.input.type, {
         scopeId: view.viewId,
@@ -276,30 +306,29 @@ export function createRuntime<
       if (!action) {
         if (!program.uiState.accepts(envelope.input)) {
           traces.fail(trace, `Unknown input type: ${envelope.input.type}`);
-          return {
-            envelopes: [
-              {
-                type: "error",
-                viewId: view.viewId,
-                traceId: trace.traceId,
-                message: `Unknown input type: ${envelope.input.type}`,
-              },
-              await traceEnvelope(view, trace),
-            ],
-          };
+          return runtimeResult([
+            {
+              type: "error",
+              viewId: view.viewId,
+              traceId: trace.traceId,
+              message: `Unknown input type: ${envelope.input.type}`,
+            },
+            await traceEnvelope(view, trace, invocation),
+          ]);
         }
 
         views.update(view, envelope.input as TUIEvent);
-        await runViewUpdateHooks(view, envelope.input as TUIEvent);
+        await runViewUpdateHooks(view, envelope.input as TUIEvent, invocation);
         traces.add(trace, "ui", `${envelope.input.type} applied`);
-        const projected = await patchView(view.viewId, trace);
+        const projected = await patchView(view.viewId, trace, invocation);
         if (trace.status !== "error") {
           traces.complete(trace);
         }
 
-        return {
-          envelopes: [...projected.envelopes, await traceEnvelope(view, trace)],
-        };
+        return runtimeResult([
+          ...projected.envelopes,
+          await traceEnvelope(view, trace, invocation),
+        ]);
       }
 
       const result = await executeAction(
@@ -309,6 +338,7 @@ export function createRuntime<
         traces,
         trace,
         actionPluginHooks,
+        (effect) => runEffect(effect, invocation),
       );
 
       traces.add(trace, "resource", "resources invalidated", {
@@ -319,57 +349,88 @@ export function createRuntime<
         viewId: view.viewId,
         cursor: "",
         traceId: trace.traceId,
+        clientInputId: envelope.clientInputId,
         action: envelope.input.type.replace(/^action\./, ""),
         ok: result.ok,
         error: result.error,
         result: result.result,
       };
-      await persistEnvelope(view, actionResult);
+      await persistEnvelope(
+        view,
+        actionResult,
+        envelope.clientInputId
+          ? {
+              clientInputId: envelope.clientInputId,
+              viewId: view.viewId,
+              status: result.ok ? "committed" : "failed",
+            }
+          : undefined,
+      );
       const projected =
         result.ok && result.invalidated.length > 0
-          ? await refreshAffectedViews(result.invalidated, trace)
+          ? await refreshAffectedViews(result.invalidated, trace, invocation)
           : { envelopes: [] };
 
       if (result.ok && trace.status !== "error") {
         traces.complete(trace);
       }
 
-      return {
-        envelopes: [
-          actionResult,
-          ...projected.envelopes,
-          ...(await traceEnvelopesFor(view, projected.envelopes, trace)),
-        ],
-      };
+      return runtimeResult([
+        actionResult,
+        ...projected.envelopes,
+        ...(await traceEnvelopesFor(view, projected.envelopes, trace, invocation)),
+      ]);
     },
   };
 
   async function persistEnvelope(
     view: ViewContext<TUIState>,
     envelope: ServerEnvelope<TProjection, TraceSnapshot>,
+    inputRecord?: {
+      clientInputId: string;
+      viewId: string;
+      status: "accepted" | "committed" | "failed";
+    },
   ): Promise<void> {
-    const cursor = await runStore(() => store.nextCursor());
+    const committed = await runStore(() =>
+      store.commitInvocation({
+        envelopes: [{ viewId: view.viewId, envelope }],
+        views: [
+          {
+            checkpoint: views.checkpoint(view),
+            expectedRevision: view.checkpointRevision,
+          },
+        ],
+        observations: [
+          {
+            fanoutScope: view.fanoutScope,
+            viewId: view.viewId,
+            regions: view.observedRegions,
+          },
+        ],
+        inputRecords: inputRecord ? [inputRecord] : [],
+      }),
+    );
+    const committedEnvelope = committed.envelopes[0]?.envelope;
+    const committedView = committed.views[0];
 
-    if (
-      envelope.type === "connected" ||
-      envelope.type === "projection:patch" ||
-      envelope.type === "projection:update" ||
-      envelope.type === "action:result" ||
-      envelope.type === "trace:update"
-    ) {
-      envelope.cursor = cursor;
+    if (committedEnvelope) {
+      Object.assign(envelope, committedEnvelope);
     }
 
-    view.cursor = cursor;
-    await runStore(() => store.appendEnvelope(view.viewId, cursor, envelope));
-    await runStore(() => store.saveView(views.checkpoint(view)));
+    if (committedView) {
+      view.cursor = committedView.cursor;
+      view.checkpointRevision = committedView.checkpointRevision ?? view.checkpointRevision;
+      view.fanoutScope = committedView.fanoutScope ?? view.fanoutScope;
+    }
   }
 
   async function traceEnvelope(
     view: ViewContext<TUIState>,
     trace: TraceSnapshot,
+    invocation: InvocationContextValue,
   ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
-    await runTraceHooks(trace);
+    await runTraceHooks(trace, invocation);
     const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
       type: "trace:update",
       viewId: view.viewId,
@@ -384,6 +445,7 @@ export function createRuntime<
     initiatingView: ViewContext<TUIState>,
     envelopes: ServerEnvelope<TProjection, TraceSnapshot>[],
     trace: TraceSnapshot,
+    invocation: InvocationContextValue,
   ): Promise<ServerEnvelope<TProjection, TraceSnapshot>[]> {
     const targetViewIds = new Set([initiatingView.viewId]);
 
@@ -399,7 +461,7 @@ export function createRuntime<
       const targetView = views.get(viewId);
 
       if (targetView) {
-        traceEnvelopes.push(await traceEnvelope(targetView, trace));
+        traceEnvelopes.push(await traceEnvelope(targetView, trace, invocation));
       }
     }
 
@@ -409,34 +471,44 @@ export function createRuntime<
   async function patchView(
     viewId: string,
     trace: TraceSnapshot,
+    invocation: InvocationContextValue,
   ): Promise<RuntimeResult<TProjection>> {
-    const computed = await computeProjection(viewId, trace);
+    const computed = await computeProjection(viewId, trace, invocation);
 
     if ("error" in computed) {
       return {
-        envelopes: [computed.error],
+        ...runtimeResult([computed.error]),
       };
     }
 
-    return {
-      envelopes: [await patchEnvelope(computed, computed.regions, trace)],
-    };
+    return runtimeResult([await patchEnvelope(computed, computed.regions, trace)]);
   }
 
   async function refreshAffectedViews(
     keys: readonly ResourceKey[],
     trace?: TraceSnapshot,
+    invocation = defaultInvocationContext(),
   ): Promise<RuntimeResult<TProjection>> {
-    await restoreCheckpointedViews();
-    const affected = affectedRegions(views.list(), keys);
+    const serializedKeys = keys.map(serializeResourceKey);
+    const indexedAffected = await runStore(() =>
+      store.findViewsObserving(invocation.fanoutScope, serializedKeys),
+    );
+    const affected =
+      indexedAffected.length > 0
+        ? indexedAffected
+        : affectedRegions(await restoreCheckpointedViews(), keys).filter((entry) => {
+            const view = views.get(entry.viewId);
+            return view?.fanoutScope === invocation.fanoutScope;
+          });
 
     program.resourceGraph.invalidate(keys);
-    await runResourceInvalidateHooks(keys);
+    await runResourceInvalidateHooks(keys, invocation);
 
     const envelopes: ServerEnvelope<TProjection, TraceSnapshot>[] = [];
 
     for (const affectedView of affected) {
-      const view = views.get(affectedView.viewId);
+      const view =
+        views.get(affectedView.viewId) ?? (await restoreViewForReceive(affectedView.viewId));
 
       if (!view) {
         continue;
@@ -449,7 +521,7 @@ export function createRuntime<
         });
       }
 
-      const computed = await computeProjection(affectedView.viewId, trace);
+      const computed = await computeProjection(affectedView.viewId, trace, invocation);
 
       if ("error" in computed) {
         envelopes.push(computed.error);
@@ -462,7 +534,7 @@ export function createRuntime<
       envelopes.push(patchOrProjection);
     }
 
-    return { envelopes };
+    return runtimeResult(envelopes);
   }
 
   async function patchEnvelope(
@@ -572,11 +644,15 @@ export function createRuntime<
     }
 
     const view = views.restore(snapshot);
-    await runViewHooks("restore", view);
+    await runViewHooks(
+      "restore",
+      view,
+      defaultInvocationContext({ fanoutScope: view.fanoutScope }),
+    );
     return view;
   }
 
-  async function restoreCheckpointedViews(): Promise<void> {
+  async function restoreCheckpointedViews(): Promise<ViewContext<TUIState>[]> {
     const snapshots = await runStore(() => store.listViews());
 
     for (const snapshot of snapshots) {
@@ -584,6 +660,8 @@ export function createRuntime<
         views.restore(snapshot);
       }
     }
+
+    return views.list();
   }
 
   function resolveScreen(route: string) {
@@ -626,46 +704,65 @@ export function createRuntime<
     params: Record<string, string>,
     matchedRoute: string | null,
   ): Promise<void> {
-    await program.runtime.runPromise(
+    await runEffect(
       Effect.forEach(
         routePluginHooks,
         (hook) => hook.resolve?.({ route, params, matchedRoute }) ?? Effect.void,
       ),
+      defaultInvocationContext(),
     );
   }
 
-  async function runViewHooks(kind: "create" | "restore", view: ViewContext<TUIState>) {
-    await program.runtime.runPromise(
+  async function runViewHooks(
+    kind: "create" | "restore",
+    view: ViewContext<TUIState>,
+    invocation: InvocationContextValue,
+  ) {
+    await runEffect(
       Effect.forEach(
         viewPluginHooks,
         (hook) => hook[kind]?.({ view: view as ViewContext<unknown> }) ?? Effect.void,
       ),
+      invocation,
     );
   }
 
-  async function runViewUpdateHooks(view: ViewContext<TUIState>, input: TUIEvent): Promise<void> {
-    await program.runtime.runPromise(
+  async function runViewUpdateHooks(
+    view: ViewContext<TUIState>,
+    input: TUIEvent,
+    invocation: InvocationContextValue,
+  ): Promise<void> {
+    await runEffect(
       Effect.forEach(
         viewPluginHooks,
         (hook) => hook.update?.({ view: view as ViewContext<unknown>, input }) ?? Effect.void,
       ),
+      invocation,
     );
   }
 
-  async function runResourceInvalidateHooks(keys: readonly ResourceKey[]): Promise<void> {
-    await program.runtime.runPromise(
+  async function runResourceInvalidateHooks(
+    keys: readonly ResourceKey[],
+    invocation: InvocationContextValue,
+  ): Promise<void> {
+    await runEffect(
       Effect.forEach(
         resourcePluginHooks,
         (hook) => hook.invalidate?.({ keys: keys.map(serializeResourceKey) }) ?? Effect.void,
       ),
+      invocation,
     );
   }
 
-  async function runTraceHooks(trace: TraceSnapshot): Promise<void> {
-    await program.runtime.runPromise(
+  async function runTraceHooks(
+    trace: TraceSnapshot,
+    invocation: InvocationContextValue,
+  ): Promise<void> {
+    await runEffect(
       Effect.forEach(trace.events, (event) =>
         Effect.forEach(tracePluginHooks, (hook) => hook.event?.({ trace, event }) ?? Effect.void),
       ),
+      invocation,
     );
   }
 
@@ -682,6 +779,38 @@ export function createRuntime<
                 error,
               ),
       }),
+    );
+  }
+
+  function resolveInvocationContext(
+    input:
+      | { type: "connect"; route: string; params: Record<string, string> }
+      | { type: "input"; viewId: string; clientInputId?: string }
+      | { type: "invalidate"; keys: readonly ResourceKey[] },
+  ): InvocationContextValue {
+    const resolved = options?.invocationContext?.(input);
+
+    return defaultInvocationContext(resolved);
+  }
+
+  function scopedFanout(
+    route: string,
+    params: Record<string, string>,
+    invocation: InvocationContextValue,
+  ): string {
+    return options?.fanoutScope?.(route, params) ?? invocation.fanoutScope;
+  }
+
+  function runEffect<A, E, R2>(
+    effect: Effect.Effect<A, E, R2>,
+    invocation: InvocationContextValue,
+  ): Promise<A> {
+    return program.runtime.runPromise(
+      Effect.provideService(
+        effect as Effect.Effect<A, E, R | InvocationContext>,
+        InvocationContext,
+        invocation,
+      ),
     );
   }
 }
@@ -715,6 +844,62 @@ function affectedRegions(
   }
 
   return affected;
+}
+
+function runtimeResult<TProjection>(
+  envelopes: ServerEnvelope<TProjection, TraceSnapshot>[],
+): RuntimeResult<TProjection> {
+  return {
+    envelopes,
+    protocolEvents: envelopes.map(protocolEventForEnvelope),
+    deliveryIntents: envelopes.flatMap((envelope) =>
+      "viewId" in envelope && envelope.viewId ? [{ viewId: envelope.viewId, envelope }] : [],
+    ),
+  };
+}
+
+function protocolEventForEnvelope<TProjection>(
+  envelope: ServerEnvelope<TProjection, TraceSnapshot>,
+): InvocationProtocolEvent {
+  if (envelope.type === "connected") {
+    return { type: "view.connected", viewId: envelope.viewId };
+  }
+
+  if (envelope.type === "projection:update") {
+    return {
+      type: "projection.updated",
+      viewId: envelope.viewId,
+      projectionVersion: envelope.projectionVersion,
+    };
+  }
+
+  if (envelope.type === "projection:patch") {
+    return {
+      type: "projection.patched",
+      viewId: envelope.viewId,
+      projectionVersion: envelope.projectionVersion,
+      regions: envelope.patch.regions.map((region) => region.id),
+    };
+  }
+
+  if (envelope.type === "action:result") {
+    return {
+      type: "action.result",
+      viewId: envelope.viewId,
+      ok: envelope.ok,
+      clientInputId: envelope.clientInputId,
+    };
+  }
+
+  if (envelope.type === "trace:update") {
+    return {
+      type: "trace.updated",
+      viewId: envelope.viewId,
+      traceId: envelope.trace.traceId,
+    };
+  }
+
+  return { type: "runtime.error", viewId: envelope.viewId, message: envelope.message };
 }
 
 function patchableRegions(

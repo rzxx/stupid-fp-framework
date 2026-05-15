@@ -7,8 +7,10 @@ export type ViewContext<TUIState> = {
   viewId: string;
   route: string;
   params: Record<string, string>;
+  fanoutScope: string;
   ui: TUIState;
   projectionVersion: number;
+  checkpointRevision: number;
   cursor: string | null;
   observedRegions: ProjectionRegionSnapshot[];
 };
@@ -22,14 +24,20 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
     this.#definition = definition;
   }
 
-  create(route: string, params: Record<string, string>): ViewContext<TUIState> {
+  create(
+    route: string,
+    params: Record<string, string>,
+    options?: { fanoutScope?: string },
+  ): ViewContext<TUIState> {
     const viewId = `view-${this.#nextId++}`;
     const view: ViewContext<TUIState> = {
       viewId,
       route,
       params,
+      fanoutScope: options?.fanoutScope ?? "global",
       ui: this.#definition.init(),
       projectionVersion: 0,
+      checkpointRevision: 0,
       cursor: null,
       observedRegions: [],
     };
@@ -51,8 +59,10 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
       viewId: checkpoint.viewId,
       route: checkpoint.route,
       params: checkpoint.params,
+      fanoutScope: checkpoint.fanoutScope ?? "global",
       ui: checkpoint.ui,
       projectionVersion: checkpoint.projectionVersion,
+      checkpointRevision: checkpoint.checkpointRevision ?? 0,
       cursor: checkpoint.cursor,
       observedRegions: checkpoint.observedRegions,
     };
@@ -78,8 +88,10 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
       viewId: view.viewId,
       route: view.route,
       params: view.params,
+      fanoutScope: view.fanoutScope,
       ui: view.ui,
       projectionVersion: view.projectionVersion,
+      checkpointRevision: view.checkpointRevision,
       cursor: view.cursor,
       observedRegions: view.observedRegions,
     };
@@ -101,8 +113,10 @@ export type ViewCheckpoint<TUIState> = {
   viewId: string;
   route: string;
   params: Record<string, string>;
+  fanoutScope?: string;
   ui: TUIState;
   projectionVersion: number;
+  checkpointRevision?: number;
   cursor: string | null;
   observedRegions: ProjectionRegionSnapshot[];
 };

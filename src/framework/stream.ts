@@ -13,6 +13,7 @@ export type ConnectEnvelope = {
 export type ClientInputEnvelope<TInput> = {
   type: "input";
   viewId: string;
+  clientInputId?: string;
   input: TInput;
 };
 
@@ -96,6 +97,7 @@ export type ActionResultEnvelope = {
   viewId: string;
   cursor: string;
   traceId: string;
+  clientInputId?: string;
   action: string;
   ok: boolean;
   error?: string;
@@ -145,6 +147,10 @@ export function parseClientEnvelope<TInput>(
     if (value.type === "input") {
       if (typeof value.viewId !== "string" || !isInputPayload(value.input)) {
         return { type: "error", message: "Invalid input envelope" };
+      }
+
+      if (value.clientInputId !== undefined && typeof value.clientInputId !== "string") {
+        return { type: "error", message: "Invalid client input id" };
       }
 
       return value as ClientInputEnvelope<TInput>;

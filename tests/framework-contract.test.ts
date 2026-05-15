@@ -11,6 +11,7 @@ import {
   defineResource,
   Context,
   Effect,
+  InvocationContext,
   JsonFileRuntimeStore,
   Layer,
   MemoryRuntimeStore,
@@ -124,6 +125,29 @@ describe("framework contract", () => {
         },
       ]),
     );
+  });
+
+  test("runtime results expose protocol events and delivery intents", async () => {
+    const runtime = createCounterRuntime();
+    const result = await runtime.connect({
+      type: "connect",
+      route: "/contract/:id",
+      params: { id: "main" },
+    });
+    const connected = result.envelopes.find((envelope) => envelope.type === "connected");
+
+    if (!connected) {
+      throw new Error("Expected connected envelope");
+    }
+
+    expect(result.protocolEvents?.map((event) => event.type)).toEqual([
+      "view.connected",
+      "projection.updated",
+    ]);
+    expect(result.deliveryIntents?.map((intent) => intent.viewId)).toEqual([
+      connected.viewId,
+      connected.viewId,
+    ]);
   });
 
   test("programs can route connections to one of multiple registered screens", async () => {
@@ -332,6 +356,31 @@ describe("framework contract", () => {
     );
   });
 
+  test("client input ids flow through action results and input records", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    const runtime = createCounterRuntime(services, store);
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      clientInputId: "client-input-1",
+      input: { type: "action.increment", amount: 1 },
+    });
+    const action = result.envelopes.find((envelope) => envelope.type === "action:result");
+
+    expect(action).toMatchObject({
+      clientInputId: "client-input-1",
+      ok: true,
+    });
+    expect(await store.readInputRecord("client-input-1")).toEqual({
+      clientInputId: "client-input-1",
+      viewId: connected.viewId,
+      status: "committed",
+    });
+  });
+
   test("plugins can observe actions resources views routes and traces", async () => {
     const observed: string[] = [];
     const plugin: FrameworkPlugin<TestEnvironment> = {
@@ -403,6 +452,66 @@ describe("framework contract", () => {
     expect(observed).toContain("resource:read:Counter(main)");
     expect(observed).toContain("resource:invalidate:Counter(main)");
     expect(observed).toContain("trace:input received");
+  });
+
+  test("invocation context is provided through Effect per input", async () => {
+    type AuthInput = { type: "action.whoami" };
+    const runtime = createRuntime(
+      defineProgram<TestEnvironment | InvocationContext, UIState, UIEvent, AuthInput, Projection>({
+        layer: createServicesLayer(createServices()) as Layer.Layer<
+          TestEnvironment | InvocationContext
+        >,
+        resources: [
+          defineResource<TestEnvironment | InvocationContext, number>("Counter", () =>
+            Effect.map(CounterService, (counter) => counter.value),
+          ),
+        ],
+        uiState: counterUIState,
+        screen: {
+          route: counterRoute,
+          project: (view, context) =>
+            Effect.gen(function* () {
+              const invocation = yield* InvocationContext;
+
+              return {
+                route: view.route,
+                params: view.params,
+                selected: view.ui.selected,
+                count: yield* context.region("counter", () => context.resources.read(counterKey)),
+                traceIds: [invocation.fanoutScope],
+              };
+            }),
+        },
+        actions: [
+          Action.define("action.whoami")
+            .input(Schema.Struct({ type: Schema.Literal("action.whoami") }))
+            .run<{ principalId: string }, TestEnvironment | InvocationContext>(() =>
+              Effect.map(InvocationContext, (context) => ({
+                principalId: context.principal?.id ?? "anonymous",
+              })),
+            ),
+        ],
+      }),
+      {
+        fanoutScope: () => "team-context",
+        invocationContext: () => ({
+          principal: { id: "user-context" },
+        }),
+      },
+    );
+    const connected = await connect(runtime as unknown as ReturnType<typeof createCounterRuntime>);
+    const result = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.whoami" },
+    });
+    const action = result.envelopes.find((envelope) => envelope.type === "action:result");
+
+    expect(connected.projection.traceIds).toEqual(["team-context"]);
+    expect(action).toMatchObject({
+      ok: true,
+      result: { principalId: "user-context" },
+    });
   });
 
   test("failed actions report errors and do not mutate durable resources", async () => {
@@ -608,15 +717,97 @@ describe("framework contract", () => {
     expect(memory.capabilities).toMatchObject({
       ephemeral: true,
       singleProcess: true,
+      singleWriter: true,
       supportsRangeRead: true,
       supportsObservationIndex: true,
+      supportsAtomicCommit: true,
+      supportsInputIdempotency: true,
     } satisfies Partial<RuntimeStoreCapabilities>);
     expect(file.capabilities).toMatchObject({
       ephemeral: false,
       singleProcess: true,
+      singleWriter: true,
       supportsRangeRead: true,
       supportsObservationIndex: true,
+      supportsAtomicCommit: true,
+      supportsInputIdempotency: true,
     } satisfies Partial<RuntimeStoreCapabilities>);
+  });
+
+  test("runtime store commit assigns cursors checkpoints observations and input records atomically", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const checkpoint = createCheckpoint("view-commit", "scope-a", [counterRegion(1)]);
+
+    const committed = await store.commitInvocation({
+      envelopes: [
+        {
+          viewId: checkpoint.viewId,
+          envelope: {
+            type: "projection:update",
+            viewId: checkpoint.viewId,
+            cursor: "",
+            projectionVersion: 1,
+            projection: projectionFor(1),
+            regions: [counterRegion(1)],
+          },
+        },
+      ],
+      views: [{ checkpoint, expectedRevision: 0 }],
+      observations: [
+        {
+          fanoutScope: "scope-a",
+          viewId: checkpoint.viewId,
+          regions: [counterRegion(1)],
+        },
+      ],
+      inputRecords: [
+        {
+          clientInputId: "input-commit",
+          viewId: checkpoint.viewId,
+          status: "committed",
+        },
+      ],
+    });
+
+    expect(committed.envelopes[0]?.cursor).toBe("cursor-1");
+    expect(committed.views[0]).toMatchObject({
+      viewId: checkpoint.viewId,
+      cursor: "cursor-1",
+      checkpointRevision: 1,
+    });
+    expect(await store.findViewsObserving("scope-a", [counterKey])).toEqual([
+      {
+        viewId: checkpoint.viewId,
+        regions: [counterRegion(1)],
+      },
+    ]);
+    expect(await store.readInputRecord("input-commit")).toEqual({
+      clientInputId: "input-commit",
+      viewId: checkpoint.viewId,
+      status: "committed",
+    });
+  });
+
+  test("observation index does not fan out across scopes", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+
+    await store.replaceViewObservations({
+      fanoutScope: "team-a",
+      viewId: "view-a",
+      regions: [counterRegion(1)],
+    });
+    await store.replaceViewObservations({
+      fanoutScope: "team-b",
+      viewId: "view-b",
+      regions: [counterRegion(1)],
+    });
+
+    expect(await store.findViewsObserving("team-a", [counterKey])).toEqual([
+      {
+        viewId: "view-a",
+        regions: [counterRegion(1)],
+      },
+    ]);
   });
 
   test("runtime stores list view checkpoints for stateless observation recovery", async () => {
@@ -1205,8 +1396,10 @@ async function assertStoreListsViews(store: RuntimeStore<UIState, Projection>) {
     viewId: "view-for-store-contract",
     route: "/contract/:id",
     params: { id: "main" },
+    fanoutScope: "global",
     ui: { selected: true },
     projectionVersion: 1,
+    checkpointRevision: 0,
     cursor: "cursor-for-store-contract",
     observedRegions: [],
   };
@@ -1219,6 +1412,43 @@ async function assertStoreListsViews(store: RuntimeStore<UIState, Projection>) {
       ui: { selected: true },
     }),
   ]);
+}
+
+function createCheckpoint(
+  viewId: string,
+  fanoutScope: string,
+  observedRegions = [] as ViewCheckpoint<UIState>["observedRegions"],
+): ViewCheckpoint<UIState> {
+  return {
+    checkpointVersion: 1,
+    viewId,
+    route: "/contract/:id",
+    params: { id: "main" },
+    fanoutScope,
+    ui: { selected: false },
+    projectionVersion: 1,
+    checkpointRevision: 0,
+    cursor: null,
+    observedRegions,
+  };
+}
+
+function counterRegion(value: number): ViewCheckpoint<UIState>["observedRegions"][number] {
+  return {
+    id: "counter",
+    value,
+    resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
+  };
+}
+
+function projectionFor(count: number): Projection {
+  return {
+    route: "/contract/:id",
+    params: { id: "main" },
+    selected: false,
+    count,
+    traceIds: [],
+  };
 }
 
 function applyCounterPatch(projection: Projection, patch: ProjectionPatchEnvelope): Projection {
