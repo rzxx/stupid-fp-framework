@@ -1,4 +1,5 @@
 import type { JsonValue } from "./json";
+import type { ProjectionRegionSnapshot } from "./projection";
 
 export type ConnectEnvelope = {
   type: "connect";
@@ -51,15 +52,7 @@ export type ProjectionEnvelope<TProjection> = {
   projectionVersion: number;
   projectionManifestVersion?: number;
   projection: TProjection;
-  regions: {
-    id: string;
-    value?: JsonValue;
-    resources: {
-      type: string;
-      id: string;
-      label: string;
-    }[];
-  }[];
+  regions: ProjectionRegionSnapshot[];
   causedByTraceId?: string;
 };
 
@@ -74,11 +67,7 @@ export type ProjectionPatchEnvelope = {
     regions: {
       id: string;
       value: JsonValue;
-      resources: {
-        type: string;
-        id: string;
-        label: string;
-      }[];
+      resources: ProjectionRegionSnapshot["resources"];
     }[];
   };
   causedByTraceId?: string;

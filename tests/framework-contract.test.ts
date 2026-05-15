@@ -340,6 +340,64 @@ describe("framework contract", () => {
     expect(anonymous).toBe("anonymous");
   });
 
+  test("resource declarations support fanout and custom cache scopes", async () => {
+    const graph = new ResourceGraph<never>();
+    const FanoutScoped = Resource.define("FanoutScoped")
+      .value<string>()
+      .scope({ kind: "fanout" })
+      .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
+        id: (params) => params.id,
+      })
+      .load<never>((_params, key) => Effect.succeed(key.scope?.id ?? "missing"));
+    const customKey = resourceKey<string>("CustomScoped", "main", "CustomScoped(main)", {
+      partition: "one",
+    });
+
+    graph.register(FanoutScoped);
+    graph.register(
+      defineResource<never, string>(
+        "CustomScoped",
+        (key) => Effect.succeed(key.scope?.id ?? "missing"),
+        {
+          scope: {
+            kind: "custom",
+            resolve: ({ context, params }) => ({
+              kind: "custom",
+              id: `${(params as { partition: string }).partition}:${context.fanoutScope}`,
+              label: "custom-partition",
+            }),
+          },
+        },
+      ),
+    );
+
+    const fanoutA = await Effect.runPromise(
+      Effect.provideService(
+        graph.read(FanoutScoped.key({ id: "main" })),
+        InvocationContext,
+        defaultPrincipalInvocation("principal-a", "fanout-a"),
+      ),
+    );
+    const fanoutB = await Effect.runPromise(
+      Effect.provideService(
+        graph.read(FanoutScoped.key({ id: "main" })),
+        InvocationContext,
+        defaultPrincipalInvocation("principal-a", "fanout-b"),
+      ),
+    );
+    const custom = await Effect.runPromise(
+      Effect.provideService(
+        graph.read(customKey),
+        InvocationContext,
+        defaultPrincipalInvocation("principal-a", "fanout-a"),
+      ),
+    );
+
+    expect(fanoutA).toBe("fanout-a");
+    expect(fanoutB).toBe("fanout-b");
+    expect(custom).toBe("one:fanout-a");
+  });
+
   test("UI events change ephemeral view state without changing durable resources", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
@@ -536,12 +594,21 @@ describe("framework contract", () => {
     expect(
       patches.map((patch) => ({
         viewId: patch.viewId,
+        scope: patch.patch.regions[0]?.resources[0]?.scope,
         value: patch.patch.regions[0]?.value,
       })),
     ).toEqual(
       expect.arrayContaining([
-        { viewId: firstView, value: "a-after" },
-        { viewId: secondView, value: "b-after" },
+        {
+          viewId: firstView,
+          scope: { kind: "principal", id: "authenticated", label: "principal:authenticated" },
+          value: "a-after",
+        },
+        {
+          viewId: secondView,
+          scope: { kind: "principal", id: "authenticated", label: "principal:authenticated" },
+          value: "b-after",
+        },
       ]),
     );
   });
@@ -1288,10 +1355,10 @@ function createServicesLayer(services: Services): Layer.Layer<TestEnvironment> {
   return Layer.succeed(CounterService, services.counter);
 }
 
-function defaultPrincipalInvocation(principalId: string) {
+function defaultPrincipalInvocation(principalId: string, fanoutScope = "global") {
   return {
     requestId: `request-${principalId}`,
-    fanoutScope: "global",
+    fanoutScope,
     principal: {
       id: principalId,
     },

@@ -100,7 +100,7 @@ export function resourceKey<TValue>(
 
 export function serializeResourceKey(key: ResourceKey): SerializedResourceKey {
   return key.scope && key.scope.kind !== "global"
-    ? { type: key.type, id: key.id, label: key.label, scope: key.scope }
+    ? { type: key.type, id: key.id, label: key.label, scope: serializeResourceScope(key.scope) }
     : { type: key.type, id: key.id, label: key.label };
 }
 
@@ -456,6 +456,26 @@ function withResolvedResourceScope<TValue>(
   scope: ResolvedResourceScope,
 ): ResourceKey<TValue> {
   return { ...key, scope };
+}
+
+function serializeResourceScope(scope: ResolvedResourceScope): SerializedResourceKey["scope"] {
+  if (scope.kind === "principal") {
+    return {
+      kind: scope.kind,
+      id: scope.id === "anonymous" ? "anonymous" : "authenticated",
+      label: scope.label,
+    };
+  }
+
+  if (scope.kind === "custom") {
+    return {
+      kind: scope.kind,
+      id: "custom",
+      label: scope.label,
+    };
+  }
+
+  return scope;
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
