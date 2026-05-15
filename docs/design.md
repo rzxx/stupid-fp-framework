@@ -13,4 +13,7 @@ For the full design context, start with [docs/design/README.md](design/README.md
 
 The first vertical-slice implementation boundary is locked in [docs/prototype-plan.md](prototype-plan.md).
 
-The current implemented pivot is recorded in [docs/stage-8-record.md](stage-8-record.md). The review that drove it is [docs/framework-state-review-5.md](framework-state-review-5.md).
+The current implemented pivot is recorded in [docs/stage-8-record.md](stage-8-record.md). The
+review that drove it is [docs/framework-state-review-5.md](framework-state-review-5.md). The
+current direction review for patch protocol, routing/layouts, Bun-native dev DX, and API syntax is
+[docs/framework-state-review-6.md](framework-state-review-6.md).

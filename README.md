@@ -163,6 +163,7 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Proposal](docs/proposal.md)** — the original pitch
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
 - **[Stage 8 Record](docs/stage-8-record.md)** — current invocation, recovery, and adapter contract implementation record
+- **[Framework State Review 6](docs/framework-state-review-6.md)** — current patch, routing, dev server, and API direction
 
 ---
 
