@@ -1,5 +1,6 @@
 import type { ProjectionRegionSnapshot } from "./projection";
 import type { UIStateDefinition } from "./ui-state";
+import type { InvocationPrincipal } from "./invocation";
 
 export const VIEW_CHECKPOINT_VERSION = 1;
 
@@ -8,6 +9,7 @@ export type ViewContext<TUIState> = {
   route: string;
   params: Record<string, string>;
   fanoutScope: string;
+  principal?: InvocationPrincipal;
   ui: TUIState;
   projectionVersion: number;
   checkpointRevision: number;
@@ -27,7 +29,7 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
   create(
     route: string,
     params: Record<string, string>,
-    options?: { fanoutScope?: string },
+    options?: { fanoutScope?: string; principal?: InvocationPrincipal },
   ): ViewContext<TUIState> {
     const viewId = `view-${this.#nextId++}`;
     const view: ViewContext<TUIState> = {
@@ -35,6 +37,7 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
       route,
       params,
       fanoutScope: options?.fanoutScope ?? "global",
+      principal: options?.principal,
       ui: this.#definition.init(),
       projectionVersion: 0,
       checkpointRevision: 0,
@@ -60,6 +63,7 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
       route: checkpoint.route,
       params: checkpoint.params,
       fanoutScope: checkpoint.fanoutScope ?? "global",
+      principal: checkpoint.principal,
       ui: checkpoint.ui,
       projectionVersion: checkpoint.projectionVersion,
       checkpointRevision: checkpoint.checkpointRevision ?? 0,
@@ -89,6 +93,7 @@ export class LiveViewRegistry<TUIState, TUIEvent> {
       route: view.route,
       params: view.params,
       fanoutScope: view.fanoutScope,
+      principal: view.principal,
       ui: view.ui,
       projectionVersion: view.projectionVersion,
       checkpointRevision: view.checkpointRevision,
@@ -114,6 +119,7 @@ export type ViewCheckpoint<TUIState> = {
   route: string;
   params: Record<string, string>;
   fanoutScope?: string;
+  principal?: InvocationPrincipal;
   ui: TUIState;
   projectionVersion: number;
   checkpointRevision?: number;

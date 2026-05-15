@@ -251,8 +251,10 @@ export function createRuntime<
         ? views.restore(resume.snapshot)
         : views.create(connectRoute.route, connectRoute.params, {
             fanoutScope: invocation.fanoutScope,
+            principal: invocation.principal,
           });
       view.fanoutScope = invocation.fanoutScope;
+      view.principal = invocation.principal;
       await runViewHooks(resume?.snapshot ? "restore" : "create", view, invocation);
       const connected: ServerEnvelope<TProjection, TraceSnapshot> = {
         type: "connected",
@@ -296,7 +298,9 @@ export function createRuntime<
       }
 
       invocation.fanoutScope = view.fanoutScope;
+      invocation.principal = invocation.principal ?? view.principal;
       invocation.clientInputId = envelope.clientInputId;
+      view.principal = invocation.principal;
 
       if (isNavigateInput(envelope.input)) {
         return navigate(view, envelope.input, invocation);
@@ -451,6 +455,7 @@ export function createRuntime<
     view.params = resolved.params;
     view.fanoutScope = scopedFanout(view.route, view.params, invocation);
     invocation.fanoutScope = view.fanoutScope;
+    view.principal = invocation.principal;
 
     const projected = await project(view.viewId, trace, invocation);
 
@@ -599,7 +604,11 @@ export function createRuntime<
         });
       }
 
-      const computed = await computeProjection(affectedView.viewId, trace, invocation);
+      const computed = await computeProjection(
+        affectedView.viewId,
+        trace,
+        invocationForView(view, invocation),
+      );
 
       if ("error" in computed) {
         envelopes.push(computed.error);
@@ -727,7 +736,7 @@ export function createRuntime<
     await runViewHooks(
       "restore",
       view,
-      defaultInvocationContext({ fanoutScope: view.fanoutScope }),
+      defaultInvocationContext({ fanoutScope: view.fanoutScope, principal: view.principal }),
     );
     return view;
   }
@@ -892,6 +901,17 @@ export function createRuntime<
         invocation,
       ),
     );
+  }
+
+  function invocationForView(
+    view: ViewContext<TUIState>,
+    invocation: InvocationContextValue,
+  ): InvocationContextValue {
+    return {
+      ...invocation,
+      fanoutScope: view.fanoutScope,
+      principal: view.principal ?? invocation.principal,
+    };
   }
 }
 

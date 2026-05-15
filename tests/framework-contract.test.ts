@@ -309,6 +309,37 @@ describe("framework contract", () => {
     ]);
   });
 
+  test("principal-scoped resources do not share cached values across principals", async () => {
+    const graph = new ResourceGraph<never>();
+    const key = resourceKey<string>("PrincipalScoped", "main");
+
+    graph.register(
+      defineResource<never, string>(
+        "PrincipalScoped",
+        (scopedKey) => Effect.succeed(scopedKey.scope?.id ?? "missing-scope"),
+        { scope: { kind: "principal" } },
+      ),
+    );
+
+    const first = await Effect.runPromise(
+      Effect.provideService(graph.read(key), InvocationContext, {
+        ...defaultPrincipalInvocation("principal-a"),
+        fanoutScope: "team-platform",
+      }),
+    );
+    const second = await Effect.runPromise(
+      Effect.provideService(graph.read(key), InvocationContext, {
+        ...defaultPrincipalInvocation("principal-b"),
+        fanoutScope: "team-platform",
+      }),
+    );
+    const anonymous = await Effect.runPromise(graph.read(key));
+
+    expect(first).toBe("principal-a");
+    expect(second).toBe("principal-b");
+    expect(anonymous).toBe("anonymous");
+  });
+
   test("UI events change ephemeral view state without changing durable resources", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
@@ -407,6 +438,110 @@ describe("framework contract", () => {
             regions: ["counter"],
           },
         }),
+      ]),
+    );
+  });
+
+  test("base-key invalidation refreshes every observed principal-scoped variant", async () => {
+    type PrincipalUIState = Record<string, never>;
+    type PrincipalUIEvent = { type: "view.noop" };
+    type PrincipalAction = { type: "action.refreshPrincipals" };
+    type PrincipalProjection = { visible: string };
+
+    const principalKey = resourceKey<string>("PrincipalVisible", "team-platform");
+    const values: Record<string, string> = {
+      "principal-a": "a-before",
+      "principal-b": "b-before",
+    };
+    const uiState = UIState.define<PrincipalUIState, PrincipalUIEvent>({
+      init: () => ({}),
+      events: [],
+    });
+    const runtime = createRuntime(
+      defineProgram<
+        InvocationContext,
+        PrincipalUIState,
+        PrincipalUIEvent,
+        PrincipalAction,
+        PrincipalProjection
+      >({
+        layer: Layer.empty as Layer.Layer<InvocationContext>,
+        resources: [
+          defineResource<InvocationContext, string>(
+            "PrincipalVisible",
+            (key) => Effect.succeed(values[key.scope?.id ?? "anonymous"] ?? "missing"),
+            { scope: { kind: "principal" } },
+          ),
+        ],
+        uiState,
+        screen: {
+          route: "/principal/:principalId",
+          project: (_view, context) =>
+            Effect.map(
+              context.region("visible", () => context.resources.read(principalKey)),
+              (visible) => ({ visible }),
+            ),
+        },
+        actions: [
+          Action.define("action.refreshPrincipals")
+            .input(Schema.Struct({ type: Schema.Literal("action.refreshPrincipals") }))
+            .run<void, InvocationContext>((_input, context) =>
+              Effect.sync(() => {
+                values["principal-a"] = "a-after";
+                values["principal-b"] = "b-after";
+                context.invalidate(principalKey);
+              }),
+            ),
+        ],
+      }),
+      {
+        fanoutScope: () => "team-platform",
+        invocationContext: (input) =>
+          input.type === "connect"
+            ? {
+                principal: {
+                  id: input.params.principalId,
+                },
+              }
+            : {},
+      },
+    );
+    const first = await runtime.connect({
+      type: "connect",
+      route: "/principal/:principalId",
+      params: { principalId: "principal-a" },
+    });
+    const second = await runtime.connect({
+      type: "connect",
+      route: "/principal/:principalId",
+      params: { principalId: "principal-b" },
+    });
+    const firstView = first.envelopes.find((envelope) => envelope.type === "connected")?.viewId;
+    const secondView = second.envelopes.find((envelope) => envelope.type === "connected")?.viewId;
+
+    if (!firstView || !secondView) {
+      throw new Error("Expected connected views");
+    }
+
+    const result = await runtime.receive({
+      type: "input",
+      viewId: firstView,
+      input: { type: "action.refreshPrincipals" },
+    });
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+
+    expect(patches.map((patch) => patch.viewId).sort()).toEqual([firstView, secondView].sort());
+    expect(
+      patches.map((patch) => ({
+        viewId: patch.viewId,
+        value: patch.patch.regions[0]?.value,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        { viewId: firstView, value: "a-after" },
+        { viewId: secondView, value: "b-after" },
       ]),
     );
   });
@@ -1151,6 +1286,16 @@ function createServices(): Services {
 
 function createServicesLayer(services: Services): Layer.Layer<TestEnvironment> {
   return Layer.succeed(CounterService, services.counter);
+}
+
+function defaultPrincipalInvocation(principalId: string) {
+  return {
+    requestId: `request-${principalId}`,
+    fanoutScope: "global",
+    principal: {
+      id: principalId,
+    },
+  };
 }
 
 function createCounterRuntime(

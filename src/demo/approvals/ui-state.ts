@@ -6,7 +6,6 @@ export const approvalUIState: UIStateDefinition<ApprovalUIState, ApprovalUIEvent
 )
   .init<ApprovalUIState>(() => ({
     selectedDeploymentId: null,
-    deploymentFilter: "",
     tracePanelOpen: true,
   }))
   .event<Extract<ApprovalUIEvent, { type: "ui.deployment.select" }>>(
@@ -18,17 +17,6 @@ export const approvalUIState: UIStateDefinition<ApprovalUIState, ApprovalUIEvent
     (state, event) => ({
       ...state,
       selectedDeploymentId: event.deploymentId,
-    }),
-  )
-  .event<Extract<ApprovalUIEvent, { type: "ui.deployment.filter" }>>(
-    "ui.deployment.filter",
-    Schema.Struct({
-      type: Schema.Literal("ui.deployment.filter"),
-      value: Schema.String,
-    }),
-    (state, event) => ({
-      ...state,
-      deploymentFilter: event.value,
     }),
   )
   .event<Extract<ApprovalUIEvent, { type: "ui.trace.toggle" }>>(

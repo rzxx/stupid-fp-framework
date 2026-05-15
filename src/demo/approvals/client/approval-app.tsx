@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   createProjectionPatchApplier,
   useProgramStream,
@@ -27,6 +27,7 @@ export function ApprovalApp(props: {
   const stream = useProgramStream<ApprovalClientInput, ApprovalProjection, TraceSnapshot>(
     streamOptions,
   );
+  const [deploymentFilter, setDeploymentFilter] = useState("");
 
   const projection = stream.projection.value;
   const selectedId = projection?.selectedDeployment?.id ?? null;
@@ -88,18 +89,9 @@ export function ApprovalApp(props: {
           <section className="workspace deployments-workspace">
             <DeploymentList
               projection={projection}
+              deploymentFilter={deploymentFilter}
               selectedId={selectedId}
-              onFilter={(value) =>
-                stream.ui.send(
-                  {
-                    type: "ui.deployment.filter",
-                    value,
-                  },
-                  {
-                    optimistic: optimisticDeploymentFilter(value),
-                  },
-                )
-              }
+              onFilter={setDeploymentFilter}
               onSelect={(deploymentId) =>
                 stream.ui.send({
                   type: "ui.deployment.select",
@@ -168,13 +160,6 @@ export function ApprovalApp(props: {
   );
 }
 
-function optimisticDeploymentFilter(value: string) {
-  return (projection: ApprovalProjection): ApprovalProjection => ({
-    ...projection,
-    deploymentFilter: value,
-  });
-}
-
 function optimisticApproval(deploymentId: string) {
   return (projection: ApprovalProjection): ApprovalProjection => ({
     ...projection,
@@ -206,6 +191,7 @@ function Banner(props: { tone: "success" | "error"; text: string }) {
 }
 
 function DeploymentList(props: {
+  deploymentFilter: string;
   onFilter: (value: string) => void;
   projection: ApprovalProjection;
   selectedId: string | null;
@@ -214,7 +200,7 @@ function DeploymentList(props: {
   const deployments = props.projection.pendingDeployments.filter((deployment) =>
     `${deployment.service} ${deployment.version} ${deployment.environment}`
       .toLowerCase()
-      .includes(props.projection.deploymentFilter.toLowerCase()),
+      .includes(props.deploymentFilter.toLowerCase()),
   );
 
   return (
@@ -229,7 +215,7 @@ function DeploymentList(props: {
           onChange={(event) => props.onFilter(event.currentTarget.value)}
           placeholder="Filter deployments"
           type="search"
-          value={props.projection.deploymentFilter}
+          value={props.deploymentFilter}
         />
       </label>
       <div className="deployment-list">

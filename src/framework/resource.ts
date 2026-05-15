@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Effect } from "./effect";
+import { Effect, Option } from "./effect";
+import {
+  InvocationContext,
+  defaultInvocationContext,
+  type InvocationContextValue,
+} from "./invocation";
 import type { JsonValue } from "./json";
 import type { ProjectionRegionSnapshot } from "./projection";
 import type { ResourceHooks } from "./plugin";
@@ -9,8 +14,37 @@ export type ResourceKey<TValue = unknown> = {
   readonly id: string;
   readonly label: string;
   readonly params?: unknown;
+  readonly scope?: ResolvedResourceScope;
   readonly __value?: TValue;
 };
+
+export type ResourceScopeKind = "global" | "fanout" | "principal" | "custom";
+
+export type ResolvedResourceScope = {
+  readonly kind: ResourceScopeKind;
+  readonly id: string;
+  readonly label: string;
+};
+
+export type ResourceScope<TParams = unknown> =
+  | {
+      readonly kind: "global";
+    }
+  | {
+      readonly kind: "fanout";
+    }
+  | {
+      readonly kind: "principal";
+      readonly anonymousId?: string;
+    }
+  | {
+      readonly kind: "custom";
+      readonly resolve: (input: {
+        readonly context: InvocationContextValue;
+        readonly params: TParams;
+        readonly key: ResourceKey;
+      }) => string | ResolvedResourceScope;
+    };
 
 export type ResourceFailure = {
   type: "resource-error";
@@ -25,6 +59,7 @@ export type ResourceLoader<R, TValue> = {
 
 export type ResourceDefinition<R, TValue> = {
   readonly type: string;
+  readonly scope?: ResourceScope;
   readonly load: ResourceLoader<R, TValue>;
 };
 
@@ -37,6 +72,11 @@ export type SerializedResourceKey = {
   type: string;
   id: string;
   label: string;
+  scope?: {
+    kind: string;
+    id: string;
+    label: string;
+  };
 };
 
 export type ResourceObservation = {
@@ -59,11 +99,18 @@ export function resourceKey<TValue>(
 }
 
 export function serializeResourceKey(key: ResourceKey): SerializedResourceKey {
-  return { type: key.type, id: key.id, label: key.label };
+  return key.scope && key.scope.kind !== "global"
+    ? { type: key.type, id: key.id, label: key.label, scope: key.scope }
+    : { type: key.type, id: key.id, label: key.label };
 }
 
 export function resourceKeyId(key: ResourceKey): string {
   return `${key.type}:${key.id}`;
+}
+
+export function scopedResourceKeyId(key: ResourceKey): string {
+  const scope = key.scope ?? globalResourceScope();
+  return `${resourceKeyId(key)}:${scope.kind}:${scope.id}`;
 }
 
 export function resourceFailure(
@@ -77,8 +124,11 @@ export function resourceFailure(
 export function defineResource<R, TValue>(
   type: string,
   load: ResourceLoader<R, TValue>,
+  options?: {
+    scope?: ResourceScope;
+  },
 ): ResourceDefinition<R, TValue> {
-  return { type, load };
+  return { type, scope: options?.scope, load };
 }
 
 export type ResourceDeclaration<R, TParams, TValue> = ResourceDefinition<R, TValue> & {
@@ -93,13 +143,19 @@ export const Resource = {
 
 class ResourceBuilder<TValue> {
   readonly #type: string;
+  readonly #scope: ResourceScope | undefined;
 
-  constructor(type: string) {
+  constructor(type: string, scope?: ResourceScope) {
     this.#type = type;
+    this.#scope = scope;
   }
 
   value<TNextValue>(): ResourceBuilder<TNextValue> {
-    return new ResourceBuilder<TNextValue>(this.#type);
+    return new ResourceBuilder<TNextValue>(this.#type, this.#scope);
+  }
+
+  scope(scope: ResourceScope): ResourceBuilder<TValue> {
+    return new ResourceBuilder<TValue>(this.#type, scope);
   }
 
   key<TParams>(
@@ -117,6 +173,7 @@ class ResourceBuilder<TValue> {
         ) => Effect.Effect<TValue, ResourceFailure, R>,
       ): ResourceDeclaration<R, TParams, TValue> => ({
         type: this.#type,
+        scope: this.#scope,
         key: (params) => {
           const id = options.id(params);
           return resourceKey(
@@ -147,21 +204,6 @@ export class ResourceGraph<R> {
   }
 
   read<TValue>(key: ResourceKey<TValue>): Effect.Effect<TValue, ResourceFailure, R> {
-    this.#recordObservation(key);
-
-    const id = resourceKeyId(key);
-    const cached = this.#cache.get(id);
-
-    if (cached) {
-      return Effect.as(
-        Effect.forEach(
-          this.#hooks,
-          (hook) => hook.afterRead?.({ key: serializeResourceKey(key) }) ?? Effect.void,
-        ),
-        cached.value as TValue,
-      );
-    }
-
     const definition = this.#definitions.get(key.type);
 
     if (!definition) {
@@ -170,51 +212,83 @@ export class ResourceGraph<R> {
       );
     }
 
-    const read = Effect.flatMap(
-      Effect.forEach(
-        this.#hooks,
-        (hook) => hook.beforeRead?.({ key: serializeResourceKey(key) }) ?? Effect.void,
+    return Effect.flatMap(
+      Effect.map(Effect.serviceOption(InvocationContext), (option) =>
+        Option.getOrElse(option, () => defaultInvocationContext()),
       ),
-      () =>
-        Effect.flatMap(
-          Effect.try({
-            try: () => definition.load(key) as Effect.Effect<TValue, ResourceFailure, R>,
-            catch: (error) =>
-              resourceFailure(
-                key.type,
-                error instanceof Error ? error.message : "Resource loader failed",
-                key.id,
-              ),
-          }),
-          (effect) => effect,
-        ),
-    );
+      (invocation) => {
+        const scopedKey = withResolvedResourceScope(
+          key,
+          resolveResourceScope(definition.scope, key, invocation),
+        );
+        this.#recordObservation(scopedKey);
 
-    return Effect.tapError(
-      Effect.tap(read, (value) =>
-        Effect.zipRight(
-          Effect.sync(() => {
-            this.#cache.set(id, { key, value });
-          }),
+        const id = scopedResourceKeyId(scopedKey);
+        const cached = this.#cache.get(id);
+
+        if (cached) {
+          return Effect.as(
+            Effect.forEach(
+              this.#hooks,
+              (hook) => hook.afterRead?.({ key: serializeResourceKey(scopedKey) }) ?? Effect.void,
+            ),
+            cached.value as TValue,
+          );
+        }
+
+        const read = Effect.flatMap(
           Effect.forEach(
             this.#hooks,
-            (hook) => hook.afterRead?.({ key: serializeResourceKey(key) }) ?? Effect.void,
+            (hook) => hook.beforeRead?.({ key: serializeResourceKey(scopedKey) }) ?? Effect.void,
           ),
-        ),
-      ),
-      (failure) =>
-        Effect.forEach(
-          this.#hooks,
-          (hook) =>
-            hook.failure?.({ key: serializeResourceKey(key), error: failure.message }) ??
-            Effect.void,
-        ),
+          () =>
+            Effect.flatMap(
+              Effect.try({
+                try: () => definition.load(scopedKey) as Effect.Effect<TValue, ResourceFailure, R>,
+                catch: (error) =>
+                  resourceFailure(
+                    key.type,
+                    error instanceof Error ? error.message : "Resource loader failed",
+                    key.id,
+                  ),
+              }),
+              (effect) => effect,
+            ),
+        );
+
+        return Effect.tapError(
+          Effect.tap(read, (value) =>
+            Effect.zipRight(
+              Effect.sync(() => {
+                this.#cache.set(id, { key: scopedKey, value });
+              }),
+              Effect.forEach(
+                this.#hooks,
+                (hook) => hook.afterRead?.({ key: serializeResourceKey(scopedKey) }) ?? Effect.void,
+              ),
+            ),
+          ),
+          (failure) =>
+            Effect.forEach(
+              this.#hooks,
+              (hook) =>
+                hook.failure?.({ key: serializeResourceKey(scopedKey), error: failure.message }) ??
+                Effect.void,
+            ),
+        );
+      },
     );
   }
 
   invalidate(keys: readonly ResourceKey[]): void {
     for (const key of keys) {
-      this.#cache.delete(resourceKeyId(key));
+      const baseId = `${resourceKeyId(key)}:`;
+
+      for (const cacheId of this.#cache.keys()) {
+        if (cacheId.startsWith(baseId)) {
+          this.#cache.delete(cacheId);
+        }
+      }
     }
   }
 
@@ -278,7 +352,7 @@ export class ResourceGraph<R> {
     if (observer) {
       const region = this.#ensureRegion(observer, observer.regionId);
 
-      region.resources.set(resourceKeyId(key), serializeResourceKey(key));
+      region.resources.set(scopedResourceKeyId(key), serializeResourceKey(key));
     }
   }
 
@@ -316,11 +390,72 @@ function uniqueResources(regions: ProjectionRegionSnapshot[]): SerializedResourc
 
   for (const region of regions) {
     for (const resource of region.resources) {
-      resources.set(`${resource.type}:${resource.id}`, resource);
+      const scope = resource.scope;
+      resources.set(
+        scope
+          ? `${resource.type}:${resource.id}:${scope.kind}:${scope.id}`
+          : `${resource.type}:${resource.id}`,
+        resource,
+      );
     }
   }
 
   return [...resources.values()];
+}
+
+function resolveResourceScope(
+  declaration: ResourceScope | undefined,
+  key: ResourceKey,
+  context: InvocationContextValue,
+): ResolvedResourceScope {
+  const scope = declaration ?? { kind: "global" };
+
+  if (scope.kind === "global") {
+    return globalResourceScope();
+  }
+
+  if (scope.kind === "fanout") {
+    return {
+      kind: "fanout",
+      id: context.fanoutScope,
+      label: `fanout:${context.fanoutScope}`,
+    };
+  }
+
+  if (scope.kind === "principal") {
+    const id = context.principal?.id ?? scope.anonymousId ?? "anonymous";
+
+    return {
+      kind: "principal",
+      id,
+      label: context.principal ? "principal:authenticated" : "principal:anonymous",
+    };
+  }
+
+  const custom = scope.resolve({
+    context,
+    params: key.params,
+    key,
+  });
+
+  return typeof custom === "string"
+    ? {
+        kind: "custom",
+        id: custom,
+        label: "custom",
+      }
+    : custom;
+}
+
+function globalResourceScope(): ResolvedResourceScope {
+  return { kind: "global", id: "global", label: "global" };
+}
+
+function withResolvedResourceScope<TValue>(
+  key: ResourceKey<TValue>,
+  scope: ResolvedResourceScope,
+): ResourceKey<TValue> {
+  return { ...key, scope };
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {

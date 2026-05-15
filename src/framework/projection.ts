@@ -12,6 +12,11 @@ export type ProjectionRegionSnapshot = {
     type: string;
     id: string;
     label: string;
+    scope?: {
+      kind: string;
+      id: string;
+      label: string;
+    };
   }[];
 };
 

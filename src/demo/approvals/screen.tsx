@@ -62,7 +62,6 @@ export const approvalDeploymentsScreen: ScreenDefinition<
         pendingDeployments,
         selectedDeployment,
         activeRuns,
-        deploymentFilter: view.ui.deploymentFilter,
       };
 
       return projection;
@@ -92,7 +91,6 @@ export const approvalRunsScreen: ScreenDefinition<
         pendingDeployments: [],
         selectedDeployment: null,
         activeRuns,
-        deploymentFilter: view.ui.deploymentFilter,
       };
 
       return projection;
@@ -124,7 +122,6 @@ function approvalLayout(
           deploymentsPath: `/teams/${teamId}/deployments`,
           runsPath: `/teams/${teamId}/runs`,
         },
-        deploymentFilter: view.ui.deploymentFilter,
         tracePanelOpen: view.ui.tracePanelOpen,
         traces: context.traces.list(),
       };

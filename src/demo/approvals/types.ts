@@ -79,20 +79,17 @@ export type ApprovalProjection = {
   pendingDeployments: DeploymentSummary[];
   selectedDeployment: DeploymentDetail | null;
   activeRuns: DeploymentRunSummary[];
-  deploymentFilter: string;
   tracePanelOpen: boolean;
   traces: TraceSnapshot[];
 };
 
 export type ApprovalUIState = {
   selectedDeploymentId: string | null;
-  deploymentFilter: string;
   tracePanelOpen: boolean;
 };
 
 export type ApprovalUIEvent =
   | { type: "ui.deployment.select"; deploymentId: string }
-  | { type: "ui.deployment.filter"; value: string }
   | { type: "ui.trace.toggle" };
 
 export type ApprovalActionInput = {
