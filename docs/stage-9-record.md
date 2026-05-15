@@ -31,6 +31,8 @@ builders, and document state placement rules.
 - Superseded the broad "local React state is valid local UI state" wording. Current docs treat
   `UIState` as the framework's app-level view/editing state and React state as adapter/render
   mechanics only.
+- Added React adapter optimistic projection overlays and split canonical app input calls into
+  `stream.ui.send` and `stream.actions.run`.
 
 ## Verification
 

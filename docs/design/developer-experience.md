@@ -130,6 +130,31 @@ Optimistic UI is expressed as a temporary projection overlay tied to a typed inp
 separate state store. UI events can optimistically update view/editing state. Actions can
 optimistically update the projection while their traces explain acceptance, rejection, or rollback.
 
+```ts
+stream.ui.send(
+  { type: "ui.trace.toggle" },
+  {
+    optimistic: (projection) => ({
+      ...projection,
+      tracePanelOpen: !projection.tracePanelOpen,
+    }),
+  },
+);
+
+stream.actions.run(
+  { type: "action.approveDeployment", deploymentId },
+  {
+    optimistic: (projection) => markDeploymentApproving(projection, deploymentId),
+    settle: "projection",
+  },
+);
+```
+
+`stream.ui.send` is for UI events that do not produce action results. `stream.actions.run` tracks a
+pending input by client input ID and clears or rolls back the optimistic overlay when the server
+responds. Low-level `stream.send` remains for adapter escape hatches, but canonical app code should
+prefer the explicit UI/action split.
+
 ### 6. Inspect The Trace
 
 When a user clicks "Approve", the developer should be able to see the causal chain:

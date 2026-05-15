@@ -90,13 +90,18 @@ export function ApprovalApp(props: {
               projection={projection}
               selectedId={selectedId}
               onFilter={(value) =>
-                stream.send({
-                  type: "ui.deployment.filter",
-                  value,
-                })
+                stream.ui.send(
+                  {
+                    type: "ui.deployment.filter",
+                    value,
+                  },
+                  {
+                    optimistic: optimisticDeploymentFilter(value),
+                  },
+                )
               }
               onSelect={(deploymentId) =>
-                stream.send({
+                stream.ui.send({
                   type: "ui.deployment.select",
                   deploymentId,
                 })
@@ -107,16 +112,32 @@ export function ApprovalApp(props: {
               canApprove={selectedIsPending && !pendingApprovalIds.has(selectedId ?? "")}
               pendingApproval={selectedId ? pendingApprovalIds.has(selectedId) : false}
               onApprove={(deploymentId) =>
-                stream.send({
-                  type: "action.approveDeployment",
-                  deploymentId,
-                })
+                stream.actions.run(
+                  {
+                    type: "action.approveDeployment",
+                    deploymentId,
+                  },
+                  {
+                    optimistic: optimisticApproval(deploymentId),
+                    settle: "projection",
+                  },
+                )
               }
             />
             <TracePanel
               projection={projection}
               traces={stream.traces.visible}
-              onToggle={() => stream.send({ type: "ui.trace.toggle" })}
+              onToggle={() =>
+                stream.ui.send(
+                  { type: "ui.trace.toggle" },
+                  {
+                    optimistic: (current) => ({
+                      ...current,
+                      tracePanelOpen: !current.tracePanelOpen,
+                    }),
+                  },
+                )
+              }
             />
             <RunPanel compact projection={projection} />
           </section>
@@ -126,7 +147,17 @@ export function ApprovalApp(props: {
             <TracePanel
               projection={projection}
               traces={stream.traces.visible}
-              onToggle={() => stream.send({ type: "ui.trace.toggle" })}
+              onToggle={() =>
+                stream.ui.send(
+                  { type: "ui.trace.toggle" },
+                  {
+                    optimistic: (current) => ({
+                      ...current,
+                      tracePanelOpen: !current.tracePanelOpen,
+                    }),
+                  },
+                )
+              }
             />
           </section>
         )
@@ -135,6 +166,29 @@ export function ApprovalApp(props: {
       )}
     </main>
   );
+}
+
+function optimisticDeploymentFilter(value: string) {
+  return (projection: ApprovalProjection): ApprovalProjection => ({
+    ...projection,
+    deploymentFilter: value,
+  });
+}
+
+function optimisticApproval(deploymentId: string) {
+  return (projection: ApprovalProjection): ApprovalProjection => ({
+    ...projection,
+    pendingDeployments: projection.pendingDeployments.filter(
+      (deployment) => deployment.id !== deploymentId,
+    ),
+    selectedDeployment:
+      projection.selectedDeployment?.id === deploymentId
+        ? {
+            ...projection.selectedDeployment,
+            status: "approving",
+          }
+        : projection.selectedDeployment,
+  });
 }
 
 function currentApprovalPath(): string {

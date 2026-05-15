@@ -53,7 +53,7 @@ export type DeploymentSummary = {
 };
 
 export type DeploymentDetail = DeploymentSummary & {
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approved" | "rejected" | "approving";
   auditTrail: AuditEntry[];
 };
 

@@ -138,6 +138,23 @@ Optimistic UI belongs to the input pipeline. The React adapter can apply a tempo
 overlay when a UI event or action is sent, then confirm or roll it back when the server projection,
 action result, or trace arrives.
 
+```ts
+stream.ui.send(
+  { type: "ui.deployment.filter", value },
+  {
+    optimistic: (projection) => ({ ...projection, deploymentFilter: value }),
+  },
+);
+
+stream.actions.run(
+  { type: "action.approveDeployment", deploymentId },
+  {
+    optimistic: markDeploymentApproving(deploymentId),
+    settle: "projection",
+  },
+);
+```
+
 ---
 
 ## quickstart
