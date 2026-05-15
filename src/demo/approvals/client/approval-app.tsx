@@ -16,12 +16,13 @@ export function ApprovalApp(props: {
     ProgramStreamReactOptions<ApprovalProjection, TraceSnapshot>
   >(() => {
     return {
-      route: "/teams/:teamId/deployments",
-      params: { teamId: "team-platform" },
+      route: currentApprovalPath(),
+      params: {},
       storageKey: "approval-stream",
       bootstrap: props.bootstrap,
       projectionTraces: (projection) => projection.traces,
       applyPatch: createProjectionPatchApplier(approvalProjectionPatchManifest),
+      router: { mode: "history" },
     };
   }, [props.bootstrap]);
   const stream = useProgramStream<ApprovalClientInput, ApprovalProjection, TraceSnapshot>(
@@ -44,6 +45,24 @@ export function ApprovalApp(props: {
           <p className="eyebrow">Durable server program prototype</p>
           <h1>Deployment approvals</h1>
         </div>
+        {projection ? (
+          <nav className="primary-nav" aria-label="Approval views">
+            <button
+              data-active={projection.page === "deployments"}
+              onClick={() => stream.navigate(projection.navigation.deploymentsPath)}
+              type="button"
+            >
+              Deployments
+            </button>
+            <button
+              data-active={projection.page === "runs"}
+              onClick={() => stream.navigate(projection.navigation.runsPath)}
+              type="button"
+            >
+              Runs
+            </button>
+          </nav>
+        ) : null}
         <div className="status-strip">
           <span data-state={stream.connection.status}>{stream.connection.status}</span>
           <span>{stream.view.id ?? "no view"}</span>
@@ -66,42 +85,63 @@ export function ApprovalApp(props: {
       ) : null}
 
       {projection ? (
-        <section className="workspace">
-          <DeploymentList
-            filter={deploymentFilter}
-            onFilter={setDeploymentFilter}
-            projection={projection}
-            selectedId={selectedId}
-            onSelect={(deploymentId) =>
-              stream.send({
-                type: "ui.deployment.select",
-                deploymentId,
-              })
-            }
-          />
-          <DetailPanel
-            projection={projection}
-            canApprove={selectedIsPending && !pendingApprovalIds.has(selectedId ?? "")}
-            pendingApproval={selectedId ? pendingApprovalIds.has(selectedId) : false}
-            onApprove={(deploymentId) =>
-              stream.send({
-                type: "action.approveDeployment",
-                deploymentId,
-              })
-            }
-          />
-          <TracePanel
-            projection={projection}
-            traces={stream.traces.visible}
-            onToggle={() => stream.send({ type: "ui.trace.toggle" })}
-          />
-          <RunPanel projection={projection} />
-        </section>
+        projection.page === "deployments" ? (
+          <section className="workspace deployments-workspace">
+            <DeploymentList
+              filter={deploymentFilter}
+              onFilter={setDeploymentFilter}
+              projection={projection}
+              selectedId={selectedId}
+              onSelect={(deploymentId) =>
+                stream.send({
+                  type: "ui.deployment.select",
+                  deploymentId,
+                })
+              }
+            />
+            <DetailPanel
+              projection={projection}
+              canApprove={selectedIsPending && !pendingApprovalIds.has(selectedId ?? "")}
+              pendingApproval={selectedId ? pendingApprovalIds.has(selectedId) : false}
+              onApprove={(deploymentId) =>
+                stream.send({
+                  type: "action.approveDeployment",
+                  deploymentId,
+                })
+              }
+            />
+            <TracePanel
+              projection={projection}
+              traces={stream.traces.visible}
+              onToggle={() => stream.send({ type: "ui.trace.toggle" })}
+            />
+            <RunPanel compact projection={projection} />
+          </section>
+        ) : (
+          <section className="workspace runs-workspace">
+            <RunPanel projection={projection} />
+            <TracePanel
+              projection={projection}
+              traces={stream.traces.visible}
+              onToggle={() => stream.send({ type: "ui.trace.toggle" })}
+            />
+          </section>
+        )
       ) : (
         <section className="loading">Waiting for server projection...</section>
       )}
     </main>
   );
+}
+
+function currentApprovalPath(): string {
+  if (typeof window === "undefined") {
+    return "/teams/team-platform/deployments";
+  }
+
+  return window.location.pathname === "/"
+    ? "/teams/team-platform/deployments"
+    : window.location.pathname;
 }
 
 function Banner(props: { tone: "success" | "error"; text: string }) {
@@ -206,9 +246,9 @@ function DetailPanel(props: {
   );
 }
 
-function RunPanel(props: { projection: ApprovalProjection }) {
+function RunPanel(props: { compact?: boolean; projection: ApprovalProjection }) {
   return (
-    <section className="panel run-panel">
+    <section className={`panel run-panel${props.compact ? " compact" : ""}`}>
       <div className="panel-header">
         <h2>Live deployment runs</h2>
         <span>{props.projection.activeRuns.length}</span>

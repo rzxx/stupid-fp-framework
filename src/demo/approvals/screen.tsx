@@ -1,13 +1,14 @@
 import {
   Effect,
+  Layout,
   Route,
   Schema,
   type ProjectionContext,
   type ScreenDefinition,
 } from "../../framework";
+import { approvalProjectionPatchManifest } from "./projection-manifest";
 import { ActiveDeploymentRuns, AuditTrail, Deployment, PendingDeployments } from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
-import { approvalProjectionPatchManifest } from "./projection-manifest";
 import type {
   ApprovalProjection,
   ApprovalUIState,
@@ -19,62 +20,114 @@ import type {
   DeploymentSummary,
 } from "./types";
 
-export const approvalScreen: ScreenDefinition<
+const operationsLayout = Layout.define("approvals.operations");
+const teamRouteParams = Schema.Struct({ teamId: Schema.String });
+
+export const approvalDeploymentsScreen: ScreenDefinition<
   ApprovalEnvironment,
   ApprovalUIState,
   ApprovalProjection
 > = {
+  layout: operationsLayout,
   route: Route.define("/teams/:teamId/deployments", {
-    params: Schema.Struct({ teamId: Schema.String }),
+    params: teamRouteParams,
   }),
   patchManifest: approvalProjectionPatchManifest,
   project(view, context) {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;
-      const teams = yield* Teams;
-      const auth = yield* Auth;
-      const team = teams.find(teamId);
-      const currentUser = auth.currentUser();
+      const layout = yield* approvalLayout(view, context);
       const pendingDeployments = yield* context.region("pendingDeployments", () =>
         Effect.map(context.resources.read(PendingDeployments(teamId)), (deployments) =>
           deployments.map(summary),
         ),
       );
-      const activeRuns = yield* context.region("activeRuns", () =>
-        Effect.map(context.resources.read(ActiveDeploymentRuns(teamId)), (runs) =>
-          runs.map(runSummary),
-        ),
-      );
+      const activeRuns = yield* activeRunsRegion(teamId, context);
       const selectedDeployment = view.ui.selectedDeploymentId
         ? yield* context.region("selectedDeployment", () =>
             selectedDetail(view.ui.selectedDeploymentId as string, context),
           )
         : null;
 
-      const tracePanel = yield* context.region("tracePanel", () =>
-        Effect.succeed({
-          open: view.ui.tracePanelOpen,
-          traces: context.traces.list(),
-        }),
-      );
+      return {
+        ...layout,
+        route: "/teams/:teamId/deployments",
+        page: "deployments",
+        pendingDeployments,
+        selectedDeployment,
+        activeRuns,
+      };
+    });
+  },
+};
+
+export const approvalRunsScreen: ScreenDefinition<
+  ApprovalEnvironment,
+  ApprovalUIState,
+  ApprovalProjection
+> = {
+  layout: operationsLayout,
+  route: Route.define("/teams/:teamId/runs", {
+    params: teamRouteParams,
+  }),
+  patchManifest: approvalProjectionPatchManifest,
+  project(view, context) {
+    return Effect.gen(function* () {
+      const teamId = view.params.teamId;
+      const layout = yield* approvalLayout(view, context);
+      const activeRuns = yield* activeRunsRegion(teamId, context);
 
       return {
-        route: "/teams/:teamId/deployments",
+        ...layout,
+        route: "/teams/:teamId/runs",
+        page: "runs",
+        pendingDeployments: [],
+        selectedDeployment: null,
+        activeRuns,
+      };
+    });
+  },
+};
+
+export const approvalScreens = [approvalDeploymentsScreen, approvalRunsScreen];
+
+function approvalLayout(
+  view: { params: Record<string, string>; ui: ApprovalUIState },
+  context: ProjectionContext<ApprovalEnvironment>,
+) {
+  return context.region("layout", () =>
+    Effect.gen(function* () {
+      const teamId = view.params.teamId;
+      const teams = yield* Teams;
+      const auth = yield* Auth;
+      const team = teams.find(teamId);
+      const currentUser = auth.currentUser();
+
+      return {
         team,
         currentUser: {
           id: currentUser.id,
           name: currentUser.name,
           role: currentUser.role,
         },
-        pendingDeployments,
-        selectedDeployment,
-        activeRuns,
-        tracePanelOpen: tracePanel.open,
-        traces: tracePanel.traces,
+        navigation: {
+          deploymentsPath: `/teams/${teamId}/deployments`,
+          runsPath: `/teams/${teamId}/runs`,
+        },
+        tracePanelOpen: view.ui.tracePanelOpen,
+        traces: context.traces.list(),
       };
-    });
-  },
-};
+    }),
+  );
+}
+
+function activeRunsRegion(teamId: string, context: ProjectionContext<ApprovalEnvironment>) {
+  return context.region("activeRuns", () =>
+    Effect.map(context.resources.read(ActiveDeploymentRuns(teamId)), (runs) =>
+      runs.map(runSummary),
+    ),
+  );
+}
 
 function selectedDetail(deploymentId: string, context: ProjectionContext<ApprovalEnvironment>) {
   return Effect.gen(function* () {

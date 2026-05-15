@@ -259,6 +259,77 @@ describe("program stream client", () => {
       }),
     );
   });
+
+  test("navigation inputs update reconnect route state", () => {
+    const first = new FakeSocket();
+    const second = new FakeSocket();
+    const sockets = [first, second];
+    const timers = new FakeTimers();
+
+    const client = connectProgramStream<TestMessage, TestProjection, TestTrace>({
+      route: "/contract",
+      params: { id: "main" },
+      reconnect: { baseDelayMs: 10, maxDelayMs: 10, jitter: false },
+      environment: {
+        streamUrl: "ws://test/stream",
+        createClientInputId: () => "client-input-nav",
+        createSocket: () => {
+          const socket = sockets.shift();
+
+          if (!socket) {
+            throw new Error("Unexpected socket creation");
+          }
+
+          return socket;
+        },
+        timers,
+      },
+      handlers: {
+        onConnectionState: () => undefined,
+        onView: () => undefined,
+        onProjection: () => undefined,
+        onPatch: () => undefined,
+        onTrace: () => undefined,
+        onActionLifecycle: () => undefined,
+        onActionResult: () => undefined,
+        onError: () => undefined,
+      },
+    });
+
+    first.open();
+    first.emit({
+      type: "connected",
+      viewId: "view-new",
+      cursor: "cursor-1",
+      resumed: false,
+      resume: { status: "fresh" },
+    });
+
+    client.navigate("/contract/next", { navigation: "push" });
+    first.close();
+    timers.runNext();
+    second.open();
+
+    expect(first.sent.at(-1)).toEqual(
+      JSON.stringify({
+        type: "input",
+        viewId: "view-new",
+        clientInputId: "client-input-nav",
+        input: {
+          type: "system.navigate",
+          path: "/contract/next",
+          navigation: "push",
+        },
+      }),
+    );
+    expect(second.sent[0]).toEqual(
+      JSON.stringify({
+        type: "connect",
+        route: "/contract/next",
+        params: {},
+      }),
+    );
+  });
 });
 
 class FakeSocket implements ProgramStreamSocket {

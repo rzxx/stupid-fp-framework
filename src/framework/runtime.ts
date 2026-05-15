@@ -9,6 +9,7 @@ import {
 } from "./invocation";
 import type { JsonValue } from "./json";
 import { actionHooks, resourceHooks, routeHooks, viewHooks, traceHooks } from "./plugin";
+import type { SystemEvent } from "./program-input";
 import { screenRouteDefinition, screenRoutePattern, type Program } from "./program";
 import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
@@ -44,10 +45,10 @@ export type Runtime<
   TProjection,
 > = {
   connect: (
-    envelope: Extract<ClientEnvelope<TUIEvent | TActionInput>, { type: "connect" }>,
+    envelope: Extract<ClientEnvelope<TUIEvent | TActionInput | SystemEvent>, { type: "connect" }>,
   ) => Promise<RuntimeResult<TProjection>>;
   receive: (
-    envelope: Extract<ClientEnvelope<TUIEvent | TActionInput>, { type: "input" }>,
+    envelope: Extract<ClientEnvelope<TUIEvent | TActionInput | SystemEvent>, { type: "input" }>,
   ) => Promise<RuntimeResult<TProjection>>;
   traces: TraceStore;
   affectedRegions: (keys: readonly ResourceKey[]) => AffectedRegion[];
@@ -297,6 +298,10 @@ export function createRuntime<
       invocation.fanoutScope = view.fanoutScope;
       invocation.clientInputId = envelope.clientInputId;
 
+      if (isNavigateInput(envelope.input)) {
+        return navigate(view, envelope.input, invocation);
+      }
+
       const trace = traces.start(envelope.input.type, {
         scopeId: view.viewId,
       });
@@ -408,6 +413,53 @@ export function createRuntime<
       ]);
     },
   };
+
+  async function navigate(
+    view: ViewContext<TUIState>,
+    input: {
+      type: "system.navigate";
+      path: string;
+      params?: Record<string, string>;
+      navigation?: "push" | "replace" | "pop" | "hash";
+    },
+    invocation: InvocationContextValue,
+  ): Promise<RuntimeResult<TProjection>> {
+    const trace = traces.start(input.type, {
+      scopeId: view.viewId,
+    });
+    const resolved = await resolveRoute(input.path, input.params ?? {});
+
+    if (!resolved) {
+      traces.fail(trace, `No screen registered for route: ${input.path}`);
+      return runtimeResult([
+        {
+          type: "error",
+          viewId: view.viewId,
+          traceId: trace.traceId,
+          message: `No screen registered for route: ${input.path}`,
+        },
+        await traceEnvelope(view, trace, invocation),
+      ]);
+    }
+
+    traces.add(trace, "system", "navigation resolved", {
+      path: input.path,
+      route: resolved.route,
+      navigation: input.navigation ?? "push",
+    });
+    view.route = resolved.route;
+    view.params = resolved.params;
+    view.fanoutScope = scopedFanout(view.route, view.params, invocation);
+    invocation.fanoutScope = view.fanoutScope;
+
+    const projected = await project(view.viewId, trace, invocation);
+
+    if (trace.status !== "error") {
+      traces.complete(trace);
+    }
+
+    return runtimeResult([...projected.envelopes, await traceEnvelope(view, trace, invocation)]);
+  }
 
   async function persistEnvelope(
     view: ViewContext<TUIState>,
@@ -957,4 +1009,18 @@ function patchableRegions(
   }
 
   return patchRegions;
+}
+
+function isNavigateInput(value: unknown): value is {
+  type: "system.navigate";
+  path: string;
+  params?: Record<string, string>;
+  navigation?: "push" | "replace" | "pop" | "hash";
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const input = value as Record<string, unknown>;
+  return input.type === "system.navigate" && typeof input.path === "string";
 }

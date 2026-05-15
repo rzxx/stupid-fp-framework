@@ -23,13 +23,24 @@ const server = await serveBunProgram<ApprovalClientInput, ApprovalProjection, Tr
     watch: Bun.env.NODE_ENV !== "production",
   },
   initialRender: {
-    resolve: () => ({
-      route: "/teams/:teamId/deployments",
-      params: { teamId: "team-platform" },
-    }),
+    resolve: (request) => resolveApprovalRoute(request),
     render: renderApprovalApp,
   },
 });
 
 // eslint-disable-next-line no-console
 console.log(`Deployment approvals prototype running at http://localhost:${server.port}`);
+
+function resolveApprovalRoute(request: Request) {
+  const url = new URL(request.url);
+  const path = url.pathname === "/" ? "/teams/team-platform/deployments" : url.pathname;
+
+  if (path === "/teams/team-platform/deployments" || path === "/teams/team-platform/runs") {
+    return {
+      route: path,
+      params: {},
+    };
+  }
+
+  return undefined;
+}

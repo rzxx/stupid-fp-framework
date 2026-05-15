@@ -1,7 +1,7 @@
 import { createRuntime, defineProgram, type RuntimeStore } from "../../framework";
 import { approvalActions } from "./actions";
 import { approvalResources } from "./resources";
-import { approvalScreen } from "./screen";
+import { approvalScreens } from "./screen";
 import {
   createApprovalLayer,
   createApprovalServices,
@@ -33,7 +33,7 @@ export function createApprovalProgram(options?: {
     layer: createApprovalLayer(services),
     resources: approvalResources,
     uiState: approvalUIState,
-    screen: approvalScreen,
+    screens: approvalScreens,
     actions: approvalActions,
   });
 }

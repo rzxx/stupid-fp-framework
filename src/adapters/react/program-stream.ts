@@ -36,6 +36,13 @@ export type ProgramStreamOptions<TProjection, TTrace> = {
 
 export type ProgramStreamClient<TInput> = {
   send: (input: TInput) => string | undefined;
+  navigate: (
+    path: string,
+    options?: {
+      params?: Record<string, string>;
+      navigation?: "push" | "replace" | "pop" | "hash";
+    },
+  ) => string | undefined;
   close: () => void;
 };
 
@@ -88,6 +95,10 @@ export function connectProgramStream<TInput, TProjection, TTrace>(
   let manuallyClosed = false;
   let reconnectAttempt = 0;
   let reconnectTimer: unknown = null;
+  let connectRoute = {
+    route: options.route,
+    params: options.params,
+  };
 
   options.handlers.onConnectionState("connecting");
   openSocket();
@@ -107,6 +118,19 @@ export function connectProgramStream<TInput, TProjection, TTrace>(
       const clientInputId = createClientInputId(options.environment);
       sendEnvelope(socket, { type: "input", viewId, clientInputId, input });
       return clientInputId;
+    },
+    navigate(path, navigateOptions) {
+      connectRoute = {
+        route: path,
+        params: navigateOptions?.params ?? {},
+      };
+
+      return this.send({
+        type: "system.navigate",
+        path,
+        params: navigateOptions?.params,
+        navigation: navigateOptions?.navigation ?? "push",
+      } as TInput);
     },
     close() {
       manuallyClosed = true;
@@ -133,8 +157,8 @@ export function connectProgramStream<TInput, TProjection, TTrace>(
 
       sendEnvelope<TInput>(socket as ProgramStreamSocket, {
         type: "connect",
-        route: options.route,
-        params: options.params,
+        route: connectRoute.route,
+        params: connectRoute.params,
         resume: resume
           ? {
               viewId: resume.viewId,
@@ -241,13 +265,19 @@ function createClientInputId(environment?: ProgramStreamEnvironment): string {
 
 function readResume(
   storageKey: string | undefined,
-  storage: ProgramStreamStorage = window.sessionStorage,
+  storage?: ProgramStreamStorage,
 ): ResumeState | undefined {
   if (!storageKey) {
     return undefined;
   }
 
-  const value = storage.getItem(storageKey);
+  const resolvedStorage = storage ?? browserSessionStorage();
+
+  if (!resolvedStorage) {
+    return undefined;
+  }
+
+  const value = resolvedStorage.getItem(storageKey);
 
   if (!value) {
     return undefined;
@@ -266,17 +296,27 @@ function readResume(
 function persistCursor<TProjection, TTrace>(
   storageKey: string | undefined,
   envelope: ServerEnvelope<TProjection, TTrace>,
-  storage: ProgramStreamStorage = window.sessionStorage,
+  storage?: ProgramStreamStorage,
 ): void {
   if (!storageKey || !("cursor" in envelope) || !envelope.viewId) {
     return;
   }
 
-  storage.setItem(
+  const resolvedStorage = storage ?? browserSessionStorage();
+
+  if (!resolvedStorage) {
+    return;
+  }
+
+  resolvedStorage.setItem(
     storageKey,
     JSON.stringify({
       viewId: envelope.viewId,
       cursor: envelope.cursor,
     }),
   );
+}
+
+function browserSessionStorage(): ProgramStreamStorage | undefined {
+  return typeof window === "undefined" ? undefined : window.sessionStorage;
 }

@@ -113,6 +113,46 @@ describe("deployment approval workflow", () => {
       ),
     ).toBe(true);
   });
+
+  test("route navigation swaps screens and preserves layout UI state", async () => {
+    const runtime = createApprovalRuntime();
+    const connected = await connect(runtime);
+
+    const toggled = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "ui.trace.toggle" },
+    });
+    const toggledPatch = latestPatch(toggled.envelopes);
+    const tracePanel = toggledPatch.patch.regions.find((region) => region.id === "layout")?.value;
+
+    expect(tracePanel).toMatchObject({ tracePanelOpen: false });
+
+    const navigated = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: {
+        type: "system.navigate",
+        path: "/teams/team-platform/runs",
+        navigation: "push",
+      },
+    });
+    const projection = latestProjection(navigated.envelopes).projection;
+    const trace = navigated.envelopes.find((envelope) => envelope.type === "trace:update")?.trace;
+
+    expect(projection.route).toBe("/teams/:teamId/runs");
+    expect(projection.page).toBe("runs");
+    expect(projection.activeRuns).toHaveLength(2);
+    expect(projection.tracePanelOpen).toBe(false);
+    expect(trace?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "system",
+          label: "navigation resolved",
+        }),
+      ]),
+    );
+  });
 });
 
 async function connect(runtime: ReturnType<typeof createApprovalRuntime>) {

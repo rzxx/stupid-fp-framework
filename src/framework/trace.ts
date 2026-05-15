@@ -10,6 +10,7 @@ export type TracePhase =
   | "effect"
   | "write"
   | "resource"
+  | "system"
   | "projection"
   | "stream"
   | "error";

@@ -65,10 +65,17 @@ export type DeploymentRunSummary = {
   updatedAt: string;
 };
 
+export type ApprovalRoute = "/teams/:teamId/deployments" | "/teams/:teamId/runs";
+
 export type ApprovalProjection = {
-  route: "/teams/:teamId/deployments";
+  route: ApprovalRoute;
+  page: "deployments" | "runs";
   team: { id: string; name: string };
   currentUser: { id: string; name: string; role: "approver" | "viewer" };
+  navigation: {
+    deploymentsPath: string;
+    runsPath: string;
+  };
   pendingDeployments: DeploymentSummary[];
   selectedDeployment: DeploymentDetail | null;
   activeRuns: DeploymentRunSummary[];
@@ -90,4 +97,11 @@ export type ApprovalActionInput = {
   deploymentId: string;
 };
 
-export type ApprovalClientInput = ApprovalUIEvent | ApprovalActionInput;
+export type ApprovalSystemInput = {
+  type: "system.navigate";
+  path: string;
+  params?: Record<string, string>;
+  navigation?: "push" | "replace" | "pop" | "hash";
+};
+
+export type ApprovalClientInput = ApprovalUIEvent | ApprovalActionInput | ApprovalSystemInput;

@@ -53,13 +53,24 @@ export type ProjectionContext<R> = {
   ) => Effect.Effect<TValue, E, R>;
 };
 
+export type LayoutDefinition = {
+  id: string;
+};
+
 export type ScreenDefinition<R, TUIState, TProjection> = {
   route: string | RouteDefinition;
+  layout?: LayoutDefinition;
   patchManifest?: ProjectionPatchManifest<TProjection>;
   project: (
     view: ViewContext<TUIState>,
     context: ProjectionContext<R>,
   ) => Effect.Effect<TProjection, ProjectionFailure | ResourceFailure, R>;
+};
+
+export const Layout = {
+  define(id: string): LayoutDefinition {
+    return { id };
+  },
 };
 
 export type ProjectionEnvelopeData<TProjection> = {

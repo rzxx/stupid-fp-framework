@@ -20,6 +20,9 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
   bootstrap?: ProgramStreamBootstrap<TProjection, TTrace>;
   projectionTraces?: (projection: TProjection) => TTrace[];
   applyPatch?: (projection: TProjection, envelope: ProjectionPatchEnvelope) => TProjection;
+  router?: {
+    mode: "history" | "hash";
+  };
 };
 
 export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
@@ -51,6 +54,7 @@ export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
     lastPatch: ProjectionPatchEnvelope | null;
   };
   send: (input: TInput) => void;
+  navigate: (path: string, options?: { replace?: boolean }) => void;
 };
 
 export function useProgramStream<TInput, TProjection, TTrace extends { traceId: string }>(
@@ -177,6 +181,19 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
     return () => stream.current?.close();
   }, [route, params, storageKey, bootstrap, projectionTraces, patchProjection]);
 
+  useEffect(() => {
+    if (!options.router || options.router.mode !== "history") {
+      return;
+    }
+
+    const onPopState = () => {
+      stream.current?.navigate(window.location.pathname, { navigation: "pop" });
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [options.router]);
+
   return {
     connection: {
       status: connection,
@@ -210,6 +227,29 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
 
       if (clientInputId) {
         setPendingInputs((current) => ({ ...current, [clientInputId]: input }));
+      }
+    },
+    navigate(path, navigateOptions) {
+      if (options.router?.mode === "history") {
+        const method = navigateOptions?.replace ? "replaceState" : "pushState";
+        window.history[method](null, "", path);
+      } else if (options.router?.mode === "hash") {
+        window.location.hash = path;
+      }
+
+      const clientInputId = stream.current?.navigate(path, {
+        navigation:
+          options.router?.mode === "hash" ? "hash" : navigateOptions?.replace ? "replace" : "push",
+      });
+
+      if (clientInputId) {
+        setPendingInputs((current) => ({
+          ...current,
+          [clientInputId]: {
+            type: "system.navigate",
+            path,
+          } as TInput,
+        }));
       }
     },
   };

@@ -37,6 +37,12 @@ export type SystemEvent =
       type: "system.resume";
       viewId: string;
       cursor: string;
+    }
+  | {
+      type: "system.navigate";
+      path: string;
+      params?: Record<string, string>;
+      navigation?: "push" | "replace" | "pop" | "hash";
     };
 
 export type ProgramInput<
