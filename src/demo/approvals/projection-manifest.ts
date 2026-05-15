@@ -10,6 +10,7 @@ export const approvalProjectionPatchManifest: ProjectionPatchManifest<ApprovalPr
         { from: ["team"], to: ["team"] },
         { from: ["currentUser"], to: ["currentUser"] },
         { from: ["navigation"], to: ["navigation"] },
+        { from: ["deploymentFilter"], to: ["deploymentFilter"] },
         { from: ["tracePanelOpen"], to: ["tracePanelOpen"] },
         { from: ["traces"], to: ["traces"] },
       ],

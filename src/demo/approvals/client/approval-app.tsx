@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   createProjectionPatchApplier,
   useProgramStream,
@@ -11,7 +11,6 @@ import type { ApprovalClientInput, ApprovalProjection } from "../types";
 export function ApprovalApp(props: {
   bootstrap?: ProgramStreamBootstrap<ApprovalProjection, TraceSnapshot>;
 }) {
-  const [deploymentFilter, setDeploymentFilter] = useState("");
   const streamOptions = useMemo<
     ProgramStreamReactOptions<ApprovalProjection, TraceSnapshot>
   >(() => {
@@ -88,10 +87,14 @@ export function ApprovalApp(props: {
         projection.page === "deployments" ? (
           <section className="workspace deployments-workspace">
             <DeploymentList
-              filter={deploymentFilter}
-              onFilter={setDeploymentFilter}
               projection={projection}
               selectedId={selectedId}
+              onFilter={(value) =>
+                stream.send({
+                  type: "ui.deployment.filter",
+                  value,
+                })
+              }
               onSelect={(deploymentId) =>
                 stream.send({
                   type: "ui.deployment.select",
@@ -149,7 +152,6 @@ function Banner(props: { tone: "success" | "error"; text: string }) {
 }
 
 function DeploymentList(props: {
-  filter: string;
   onFilter: (value: string) => void;
   projection: ApprovalProjection;
   selectedId: string | null;
@@ -158,7 +160,7 @@ function DeploymentList(props: {
   const deployments = props.projection.pendingDeployments.filter((deployment) =>
     `${deployment.service} ${deployment.version} ${deployment.environment}`
       .toLowerCase()
-      .includes(props.filter.toLowerCase()),
+      .includes(props.projection.deploymentFilter.toLowerCase()),
   );
 
   return (
@@ -173,7 +175,7 @@ function DeploymentList(props: {
           onChange={(event) => props.onFilter(event.currentTarget.value)}
           placeholder="Filter deployments"
           type="search"
-          value={props.filter}
+          value={props.projection.deploymentFilter}
         />
       </label>
       <div className="deployment-list">
