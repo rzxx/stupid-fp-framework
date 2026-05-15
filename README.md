@@ -25,7 +25,7 @@ No API layer. No client-side cache soup. No manual sync. Domain state lives in t
 
 ## this is
 
-- A **Bun-native** framework (no webpack, no vite, no node — just `bun --hot`)
+- A **Bun-native** framework (no webpack, no vite by default — just `bun --hot`)
 - **Effect-powered** backend — typed, composable, testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
 - **Domain + UI state** — durable workflow truth stays in resources/actions; transient view/editing context is modeled as UI state
@@ -63,12 +63,17 @@ class Deployments extends Context.Tag("Deployments")<
 >() {}
 
 // A resource — typed key + Effect-native loader
-const PendingDeployments = defineResource("PendingDeployments", (key) =>
-  Effect.gen(function* () {
-    const deployments = yield* Deployments;
-    return deployments.pending(key.id);
-  }),
-);
+const PendingDeployments = Resource.define("PendingDeployments")
+  .value<Deployment[]>()
+  .key(Schema.Struct({ teamId: Schema.String }), {
+    id: (params) => params.teamId,
+  })
+  .load((params) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.pending(params.teamId);
+    }),
+  );
 
 // An action — schema-backed input + Effect transaction
 const approveDeployment = Action.define("action.approveDeployment")
@@ -82,41 +87,52 @@ const approveDeployment = Action.define("action.approveDeployment")
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       const deployment = yield* Effect.sync(() => deployments.approve(msg.deploymentId));
-      ctx.invalidate(PendingDeployments.key(deployment.teamId));
-      ctx.invalidate(Deployment.key(msg.deploymentId));
+      ctx.invalidate(PendingDeployments.key({ teamId: deployment.teamId }));
+      ctx.invalidate(Deployment.key({ deploymentId: msg.deploymentId }));
     }),
   );
 
 // UI state — view/editing context, not durable workflow truth
-const approvalUI = UIState.define({
-  init: () => ({ selectedDeploymentId: null }),
-  events: [
-    {
-      type: "ui.deployment.select",
-      schema: Schema.Struct({
-        type: Schema.Literal("ui.deployment.select"),
-        deploymentId: Schema.String,
-      }),
-      update: (ui, event) => ({ ...ui, selectedDeploymentId: event.deploymentId }),
-    },
-  ],
-});
+const approvalUI = UIState.define("approval.ui")
+  .init(() => ({ selectedDeploymentId: null }))
+  .event(
+    "ui.deployment.select",
+    Schema.Struct({
+      type: Schema.Literal("ui.deployment.select"),
+      deploymentId: Schema.String,
+    }),
+    (ui, event) => ({ ...ui, selectedDeploymentId: event.deploymentId }),
+  )
+  .build();
 
 // A screen — reads resources in named regions
-const screen = {
-  route: Route.define("/teams/:teamId/deployments", {
+const screen = Screen.define("approval.deployments")
+  .route("/teams/:teamId/deployments", {
     params: Schema.Struct({ teamId: Schema.String }),
-  }),
-  project: (view, ctx) =>
+  })
+  .patchManifest(approvalProjectionPatchManifest)
+  .project((view, ctx) =>
     Effect.gen(function* () {
       return {
         pending: yield* ctx.region("pendingDeployments", () =>
-          ctx.resources.read(PendingDeployments.key(view.params.teamId)),
+          ctx.resources.read(PendingDeployments.key({ teamId: view.params.teamId })),
         ),
       };
     }),
-};
+  );
+
+const program = Program.define("approval")
+  .resources(PendingDeployments, Deployment)
+  .ui(approvalUI)
+  .screens(screen)
+  .actions(approveDeployment)
+  .build();
 ```
+
+Local React state is still valid for local-only presentation state. If losing it only changes how a
+viewer is looking at the screen, keep it local. If the server projection or resume depends on it,
+model it as `UIState`. If losing it corrupts workflow truth, model it as domain state through
+resources and actions.
 
 ---
 
@@ -132,7 +148,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
-bun test          # runs 56 contract + integration + acceptance tests
+bun test          # runs the contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
 ```
@@ -141,7 +157,7 @@ bun check         # typecheck + lint + format check
 
 ## project status
 
-This is v0.0.0. It's a working prototype that passes all of its contract, integration, and acceptance tests (yes, really — 46 of them). But it's:
+This is v0.0.0. It's a working prototype that passes its contract, integration, and acceptance tests. But it's:
 
 - Not optimized for production
 - Runtime stores are contract-tested development adapters, not production durability adapters yet
@@ -164,6 +180,7 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
 - **[Stage 8 Record](docs/stage-8-record.md)** — current invocation, recovery, and adapter contract implementation record
 - **[Framework State Review 6](docs/framework-state-review-6.md)** — current patch, routing, dev server, and API direction
+- **[Stage 9 Record](docs/stage-9-record.md)** — implementation record for patch manifests, navigation, Bun assets, and builder APIs
 
 ---
 

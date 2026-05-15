@@ -36,6 +36,7 @@ process memory. Bun is the first host adapter, not the whole runtime model.
 - [../framework-state-review-5.md](../framework-state-review-5.md): Stage 8 pivot review for invocation contracts, client recovery, scoped observations, and adapter protocol.
 - [../framework-state-review-6.md](../framework-state-review-6.md): current review for patch protocol, routing/layouts, Bun-native dev DX, API syntax, and state placement rules.
 - [../stage-8-record.md](../stage-8-record.md): implementation record for invocation, recovery, scoped observation, and adapter contracts.
+- [../stage-9-record.md](../stage-9-record.md): implementation record for Review 6 patch, routing, Bun asset, and builder API work.
 
 ## How To Use This Set
 
@@ -47,5 +48,6 @@ If you are starting a new planning or implementation task, read [model.md](model
 - first implementation work: [../prototype-plan.md](../prototype-plan.md)
 - current invocation/recovery/adapter pivot: [../stage-8-record.md](../stage-8-record.md)
 - current patch/routing/dev/API direction: [../framework-state-review-6.md](../framework-state-review-6.md)
+- current implementation record: [../stage-9-record.md](../stage-9-record.md)
 
 This is not a final implementation spec. The API sketches are illustrative. The goal is to keep the project understandable and buildable enough that each next planning step can focus on a prototype without losing the larger vision.

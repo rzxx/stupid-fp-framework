@@ -35,7 +35,6 @@ export type BunProgramHostOptions<TInput, TProjection, TTrace> = {
   rootDir: string;
   clientEntry: string;
   shellPath: string;
-  stylesPath?: string;
   assets?: {
     styles?: BunStyleAsset[];
   };
@@ -288,16 +287,7 @@ function normalizeStyleAssets<TInput, TProjection, TTrace>(
   options: BunProgramHostOptions<TInput, TProjection, TTrace>,
   outdir: string,
 ): PreparedStyleAsset[] {
-  const legacy: BunStyleAsset[] = options.stylesPath
-    ? [
-        {
-          input: options.stylesPath,
-          route: "/styles.css",
-          output: join(outdir, "styles.css"),
-        },
-      ]
-    : [];
-  const styles = [...legacy, ...(options.assets?.styles ?? [])];
+  const styles = options.assets?.styles ?? [];
 
   return styles.map((asset) => {
     const route = asset.route ?? `/${asset.output ?? "styles.css"}`;

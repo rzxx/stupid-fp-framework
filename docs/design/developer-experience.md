@@ -100,6 +100,15 @@ Examples of UI state:
 
 The goal is not to forbid client-side state. The goal is to stop accidental client ownership of important server workflow state.
 
+Use this placement rule:
+
+```txt
+If losing it only changes presentation, it can be local UI state.
+If the server projection or resume depends on it, model it as UIState.
+If losing it corrupts workflow truth, permissions, sharing, audit, or durable process state,
+model it as domain state through resources and actions.
+```
+
 ### 5. Project Server State Into UI
 
 The screen observes resources, combines them with UI state, and produces a projection. The React adapter renders that projection and hosts normal React components where useful.
@@ -129,23 +138,29 @@ These sketches show the intended shape. They are not final API commitments.
 ### Program And Resources
 
 ```ts
-const OperationsProgram = Program.define("operations")
-  .services({
-    auth: AuthService,
-    deployments: DeploymentService,
-    incidents: IncidentService,
-    audit: AuditService,
-    clock: Clock,
+const Deployment = Resource.define("Deployment")
+  .value<DeploymentRecord | undefined>()
+  .key(Schema.Struct({ deploymentId: Schema.String }), {
+    id: (params) => params.deploymentId,
   })
-  .resources({
-    deployment: Resource.entity("Deployment", DeploymentId, function* (id) {
-      return yield* Deployments.find(id);
+  .load((params) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.find(params.deploymentId);
     }),
+  );
 
-    pendingDeployments: Resource.query("PendingDeployments", TeamId, function* (teamId) {
-      return yield* Deployments.pendingForTeam(teamId);
+const PendingDeployments = Resource.define("PendingDeployments")
+  .value<DeploymentRecord[]>()
+  .key(Schema.Struct({ teamId: Schema.String }), {
+    id: (params) => params.teamId,
+  })
+  .load((params) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.pendingForTeam(params.teamId);
     }),
-  });
+  );
 ```
 
 The important idea is that resources are named and observable. They are part of the program model, not hidden fetch calls.
@@ -155,17 +170,22 @@ The important idea is that resources are named and observable. They are part of 
 ```ts
 const approveDeployment = Action.define("deployment.approve")
   .input({ deploymentId: DeploymentId })
-  .run(function* ({ deploymentId }) {
-    const user = yield* Auth.currentUser;
-    const deployment = yield* Deployments.find(deploymentId);
+  .run((input, context) =>
+    Effect.gen(function* () {
+      const user = yield* Auth.currentUser;
+      const deployment = yield* Deployments.find(input.deploymentId);
 
-    yield* Permissions.require(user, "deployment:approve", deployment.teamId);
-    yield* Deployments.approve(deploymentId, user.id);
-    yield* Audit.write("deployment.approved", { deploymentId, userId: user.id });
+      yield* Permissions.require(user, "deployment:approve", deployment.teamId);
+      yield* Deployments.approve(input.deploymentId, user.id);
+      yield* Audit.write("deployment.approved", {
+        deploymentId: input.deploymentId,
+        userId: user.id,
+      });
 
-    yield* Resource.invalidate(Deployment(deploymentId));
-    yield* Resource.invalidate(PendingDeployments(deployment.teamId));
-  });
+      context.invalidate(Deployment.key({ deploymentId: input.deploymentId }));
+      context.invalidate(PendingDeployments.key({ teamId: deployment.teamId }));
+    }),
+  );
 ```
 
 This should feel closer to a workflow transaction than an API route.
@@ -173,26 +193,22 @@ This should feel closer to a workflow transaction than an API route.
 ### UI State
 
 ```ts
-const ApprovalUI = UIState.define({
-  init: () => ({
+const ApprovalUI = UIState.define("approval.ui")
+  .init(() => ({
     selectedDeployment: null as DeploymentId | null,
     detailsPanel: "closed" as "closed" | "open",
     tracePanel: "closed" as "closed" | "open",
-  }),
-
-  events: {
-    "deployment.select": (state, deploymentId: DeploymentId) => ({
-      ...state,
-      selectedDeployment: deploymentId,
-      detailsPanel: "open",
-    }),
-
-    "trace.toggle": (state) => ({
-      ...state,
-      tracePanel: state.tracePanel === "open" ? "closed" : "open",
-    }),
-  },
-});
+  }))
+  .event("deployment.select", SelectDeployment, (state, event) => ({
+    ...state,
+    selectedDeployment: event.deploymentId,
+    detailsPanel: "open",
+  }))
+  .event("trace.toggle", ToggleTracePanel, (state) => ({
+    ...state,
+    tracePanel: state.tracePanel === "open" ? "closed" : "open",
+  }))
+  .build();
 ```
 
 This is UI state. It is useful, can be checkpointed for resume, and must not become the only copy of durable workflow truth.
@@ -200,22 +216,39 @@ This is UI state. It is useful, can be checkpointed for resume, and must not bec
 ### Screen Projection
 
 ```tsx
-const ApprovalScreen = Screen.define("/teams/:teamId/deployments")
-  .observe(({ teamId }) => ({
-    pending: PendingDeployments(teamId),
-  }))
-  .ui(ApprovalUI)
-  .view(({ pending, ui, send }) => (
-    <DeploymentApprovalConsole
-      deployments={pending}
-      selectedDeployment={ui.selectedDeployment}
-      onSelect={(deploymentId) => send({ type: "ui.deployment.select", deploymentId })}
-      onApprove={(deploymentId) => send(approveDeployment({ deploymentId }))}
-    />
-  ));
+const ApprovalScreen = Screen.define("approval.deployments")
+  .route("/teams/:teamId/deployments", {
+    params: Schema.Struct({ teamId: Schema.String }),
+  })
+  .patchManifest(approvalProjectionPatchManifest)
+  .project((view, context) =>
+    Effect.gen(function* () {
+      return {
+        pending: yield* context.region("pendingDeployments", () =>
+          context.resources.read(PendingDeployments.key({ teamId: view.params.teamId })),
+        ),
+        selectedDeploymentId: view.ui.selectedDeployment,
+      };
+    }),
+  );
 ```
 
 The React component is ordinary UI. The surrounding model is not ordinary client-side fetching and mutation.
+
+### Program Composition
+
+```ts
+const OperationsProgram = Program.define("operations")
+  .layer(OperationsLayer)
+  .resources(Deployment, PendingDeployments)
+  .ui(ApprovalUI)
+  .screens(ApprovalScreen, DeploymentRunsScreen)
+  .actions(approveDeployment, startAgentRun)
+  .build();
+```
+
+Programs compose named declarations. Object literals remain useful for low-level adapter options,
+but core framework concepts should read like declarations.
 
 ### Long-Running Work
 

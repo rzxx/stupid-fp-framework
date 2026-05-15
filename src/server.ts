@@ -17,7 +17,15 @@ const server = await serveBunProgram<ApprovalClientInput, ApprovalProjection, Tr
   rootDir: root,
   clientEntry: join(root, "demo", "approvals", "client", "app.tsx"),
   shellPath: join(root, "shell.html"),
-  stylesPath: join(root, "demo", "approvals", "client", "styles.css"),
+  assets: {
+    styles: [
+      {
+        input: join(root, "demo", "approvals", "client", "styles.css"),
+        route: "/styles.css",
+        output: "styles.css",
+      },
+    ],
+  },
   port,
   dev: {
     watch: Bun.env.NODE_ENV !== "production",

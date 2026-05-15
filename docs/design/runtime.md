@@ -43,6 +43,7 @@ Responsibilities:
 - load the server program
 - host the custom stream transport
 - integrate with Bun's bundling and dev server capabilities over time
+- run Bun-native asset hooks for styles and other development outputs
 - provide the first local development story
 
 Bun should be treated as the practical host, not the whole architecture. The model should still be shaped by serverless constraints: processes can die, memory can disappear, and reconnect should be expected.
@@ -55,8 +56,9 @@ Responsibilities:
 
 - receive inputs from the stream
 - create or resume views
-- route inputs to actions or UI events
+- route inputs to actions, UI events, resource events, or system navigation
 - resolve screens and observed resources
+- apply route transitions and preserve view/UI checkpoints
 - coordinate projection recomputation
 - emit stream patches
 - record traces
@@ -132,6 +134,16 @@ The first stream can be intentionally small. It only needs to prove that typed i
 
 The stream should be custom at first. React Flight and RSC should remain inspirations and possible adapters, not the framework kernel.
 
+### Projection Patches
+
+The current canonical patch protocol is a region-value patch. Screens declare stable named regions
+and a projection patch manifest. Runtime records which resources each region reads. When resources
+are invalidated, affected views are found through the observation index and the runtime streams
+`projection:patch` envelopes containing recomputed region values.
+
+Adapters apply those values through the manifest. If a region is unpatchable or the manifest is
+incompatible, the runtime and adapter must be able to fall back to a full projection update.
+
 ### React Adapter
 
 The React adapter renders projections and hosts React components.
@@ -195,6 +207,22 @@ This may produce HTML or JSX-like output as an implementation detail, but the co
 ```
 
 The developer sees one workflow transaction rather than a frontend event, an API call, a backend handler, a client cache mutation, and a separate debugging trail.
+
+### Route Navigation
+
+```txt
+1. Browser history, hash, or a navigation control changes the target path.
+2. The React adapter sends a system.navigate input for the current view.
+3. Runtime resolves the route and params through registered screen routes.
+4. Runtime updates the view checkpoint route and params.
+5. Layout-level UI state remains available through the same view checkpoint.
+6. The target screen observes resources and computes a projection.
+7. Stream sends a full projection update for the route transition.
+8. Later resource invalidations continue to patch named regions.
+```
+
+Navigation is a system input, not an app action. It can be traced and resumed, but it should not
+look like a domain transaction.
 
 ### Live Resource Update
 
