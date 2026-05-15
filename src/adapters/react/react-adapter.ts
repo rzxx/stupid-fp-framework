@@ -74,6 +74,7 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
   const [cursor, setCursor] = useState<string | null>(options.bootstrap?.cursor ?? null);
   const [traces, setTraces] = useState<TTrace[]>(options.bootstrap?.traces ?? []);
   const [pendingInputs, setPendingInputs] = useState<Record<string, TInput>>({});
+  const pendingInputsRef = useRef<Record<string, TInput>>({});
   const [lastLifecycle, setLastLifecycle] = useState<ActionLifecycleEnvelope | null>(null);
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
@@ -88,13 +89,36 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
   } = options;
 
   useEffect(() => {
+    pendingInputsRef.current = pendingInputs;
+  }, [pendingInputs]);
+
+  useEffect(() => {
     stream.current = connectProgramStream<TInput, TProjection, TTrace>({
       route,
       params,
       storageKey,
       bootstrap,
       handlers: {
-        onConnectionState: setConnection,
+        onConnectionState(nextConnection) {
+          setConnection(nextConnection);
+
+          if (nextConnection !== "closed" && nextConnection !== "error") {
+            return;
+          }
+
+          const pendingCount = Object.keys(pendingInputsRef.current).length;
+
+          if (pendingCount === 0) {
+            return;
+          }
+
+          pendingInputsRef.current = {};
+          setPendingInputs({});
+          setLastError({
+            type: "error",
+            message: `Stream ${nextConnection} with ${pendingCount} pending input(s); in-flight input recovery is not supported.`,
+          });
+        },
         onView(nextViewId, nextResumed, nextResume) {
           setViewId(nextViewId);
           setResumed(nextResumed);
@@ -170,6 +194,7 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
             setPendingInputs((current) => {
               const next = { ...current };
               delete next[envelope.clientInputId as string];
+              pendingInputsRef.current = next;
               return next;
             });
           }
@@ -226,7 +251,11 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
       const clientInputId = stream.current?.send(input);
 
       if (clientInputId) {
-        setPendingInputs((current) => ({ ...current, [clientInputId]: input }));
+        setPendingInputs((current) => {
+          const next = { ...current, [clientInputId]: input };
+          pendingInputsRef.current = next;
+          return next;
+        });
       }
     },
     navigate(path, navigateOptions) {
@@ -237,20 +266,10 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
         window.location.hash = path;
       }
 
-      const clientInputId = stream.current?.navigate(path, {
+      stream.current?.navigate(path, {
         navigation:
           options.router?.mode === "hash" ? "hash" : navigateOptions?.replace ? "replace" : "push",
       });
-
-      if (clientInputId) {
-        setPendingInputs((current) => ({
-          ...current,
-          [clientInputId]: {
-            type: "system.navigate",
-            path,
-          } as TInput,
-        }));
-      }
     },
   };
 }

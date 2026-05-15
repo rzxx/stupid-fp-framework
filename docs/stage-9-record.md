@@ -24,6 +24,9 @@ builders, and document state placement rules.
 - Migrated the demo server from legacy `stylesPath` to the asset hook path.
 - Added named builder APIs for `Resource`, `UIState`, `Screen`, and `Program`.
 - Migrated the approval demo to the named builder APIs.
+- Kept in-flight action recovery explicitly unsupported: the React adapter clears pending action
+  inputs and reports an error if the stream closes before an action result arrives, while navigation
+  inputs are not tracked as pending actions.
 - Updated public docs and README examples to teach the builder syntax and state placement rule.
 
 ## Verification
@@ -38,5 +41,5 @@ builders, and document state placement rules.
   still gain named result/error metadata later.
 - Layout declarations are intentionally lightweight. A future pass can add layout-specific UI
   policy if the two-screen demo exposes enough pressure.
-- In-flight action recovery after disconnect is still conservative. Client input IDs and input
-  records exist, but recover/dedupe/unknown-commit semantics need a focused protocol pass.
+- Rich in-flight action recovery after disconnect is still conservative. Client input IDs and input
+  records exist, but automatic recover/dedupe/unknown-commit semantics need a focused protocol pass.
