@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { serveBunProgram, type ClientEnvelope, type ServerEnvelope } from "../src/framework";
@@ -148,6 +148,52 @@ describe("Bun host stream delivery", () => {
       const html = await response.text();
 
       expect(html).toContain("/__stupid_fp_reload");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("style asset hooks build and serve Bun-native CSS outputs", async () => {
+    const root = join(tmpdir(), `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    const styleInput = join(root, "styles.input.css");
+    const outdir = join(root, "dist");
+    await writeFile(clientEntry, "console.log('host test');\n");
+    await writeFile(shellPath, '<html><body><div id="root"></div></body></html>');
+    await writeFile(styleInput, ".demo { color: red; }\n");
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir,
+      port: 0,
+      dev: { watch: true },
+      assets: {
+        styles: [
+          {
+            input: styleInput,
+            output: "assets/demo.css",
+            route: "/assets/demo.css",
+            watch: [styleInput],
+            build: async ({ input, output }) => {
+              const source = await readFile(input, "utf8");
+              await writeFile(output, `/* built */\n${source}`);
+            },
+          },
+        ],
+      },
+    });
+
+    try {
+      const css = await fetch(`http://localhost:${server.port}/assets/demo.css`);
+      const status = await fetch(`http://localhost:${server.port}/__stupid_fp_dev_status`);
+
+      expect(await css.text()).toContain("/* built */");
+      expect(await status.json()).toEqual({ ok: true, error: null });
     } finally {
       server.stop(true);
     }

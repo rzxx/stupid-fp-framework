@@ -13,6 +13,14 @@ import {
 
 type BunSocketData = { kind: "stream" | "reload" };
 
+export type BunStyleAsset = {
+  input: string;
+  route?: string;
+  output?: string;
+  watch?: string[];
+  build?: (asset: { input: string; output: string; route: string }) => void | Promise<void>;
+};
+
 export type BunRuntime<TInput, TProjection, TTrace> = {
   connect: (
     envelope: Extract<ClientEnvelope<TInput>, { type: "connect" }>,
@@ -28,6 +36,9 @@ export type BunProgramHostOptions<TInput, TProjection, TTrace> = {
   clientEntry: string;
   shellPath: string;
   stylesPath?: string;
+  assets?: {
+    styles?: BunStyleAsset[];
+  };
   outdir?: string;
   port?: number;
   dev?: {
@@ -49,11 +60,15 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
 ): Promise<Bun.Server<BunSocketData>> {
   const outdir = options.outdir ?? join(options.rootDir, "..", "dist");
   const clientOut = join(outdir, "app.js");
+  const devState: BunDevState = { lastBuildError: null };
   const delivery = new SocketDelivery<TProjection, TTrace>();
   const reload = new DevReloadDelivery();
 
   await buildClient(options.clientEntry, outdir);
-  const watchers = options.dev?.watch ? watchClient(options, outdir, reload) : [];
+  const assets = await prepareAssets(options, outdir, devState);
+  const watchers = options.dev?.watch
+    ? watchDevInputs(options, outdir, assets, reload, devState)
+    : [];
 
   const server = Bun.serve<BunSocketData>({
     port: options.port,
@@ -76,14 +91,23 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
+      if (url.pathname === "/__stupid_fp_dev_status" && options.dev?.watch) {
+        return Response.json({
+          ok: devState.lastBuildError === null,
+          error: devState.lastBuildError,
+        });
+      }
+
       if (url.pathname === "/client.js") {
         return new Response(Bun.file(clientOut), {
           headers: { "Content-Type": "text/javascript; charset=utf-8" },
         });
       }
 
-      if (url.pathname === "/styles.css" && options.stylesPath) {
-        return new Response(Bun.file(options.stylesPath), {
+      const asset = assets.byRoute.get(url.pathname);
+
+      if (asset) {
+        return new Response(Bun.file(asset.output), {
           headers: { "Content-Type": "text/css; charset=utf-8" },
         });
       }
@@ -170,7 +194,21 @@ function injectDevReload(html: string, options: { dev?: { watch?: boolean } }): 
 
   const script = `<script type="module">
 const socket = new WebSocket((location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/__stupid_fp_reload");
-socket.addEventListener("message", () => location.reload());
+socket.addEventListener("message", (event) => {
+  if (event.data === "reload") {
+    location.reload();
+    return;
+  }
+
+  try {
+    const message = JSON.parse(event.data);
+    if (message.type === "build-error") {
+      console.error("[stupid-fp] dev build failed", message.error);
+    }
+  } catch {
+    console.error("[stupid-fp] unknown dev reload message", event.data);
+  }
+});
 </script>`;
 
   return html.includes("</body>")
@@ -178,13 +216,18 @@ socket.addEventListener("message", () => location.reload());
     : `${html}${script}`;
 }
 
-function watchClient<TInput, TProjection, TTrace>(
+function watchDevInputs<TInput, TProjection, TTrace>(
   options: BunProgramHostOptions<TInput, TProjection, TTrace>,
   outdir: string,
+  assets: PreparedAssets,
   reload: DevReloadDelivery,
+  devState: BunDevState,
 ): FSWatcher[] {
   let pending: unknown = null;
-  const watched = new Set([options.clientEntry, options.stylesPath].filter(isString).map(dirname));
+  const watched = new Set([
+    dirname(options.clientEntry),
+    ...assets.styles.flatMap((asset) => asset.watchPaths),
+  ]);
   const rebuild = () => {
     if (pending !== null) {
       clearTimeout(pending as ReturnType<typeof setTimeout>);
@@ -192,15 +235,112 @@ function watchClient<TInput, TProjection, TTrace>(
 
     pending = setTimeout(() => {
       pending = null;
-      void buildClient(options.clientEntry, outdir).then(() => reload.reload());
+      void rebuildDevOutputs(options, outdir, assets, reload, devState);
     }, 40);
   };
 
   return [...watched].map((path) => watch(path, { recursive: true }, rebuild));
 }
 
-function isString(value: unknown): value is string {
-  return typeof value === "string";
+async function rebuildDevOutputs<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
+  outdir: string,
+  assets: PreparedAssets,
+  reload: DevReloadDelivery,
+  devState: BunDevState,
+): Promise<void> {
+  try {
+    await buildClient(options.clientEntry, outdir);
+    await buildStyleAssets(assets.styles);
+    devState.lastBuildError = null;
+    reload.reload();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Dev build failed";
+    devState.lastBuildError = message;
+    reload.error(message);
+  }
+}
+
+async function prepareAssets<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
+  outdir: string,
+  devState: BunDevState,
+): Promise<PreparedAssets> {
+  const styles = normalizeStyleAssets(options, outdir);
+  const prepared = {
+    styles,
+    byRoute: new Map(styles.map((asset) => [asset.route, asset])),
+  };
+
+  try {
+    await buildStyleAssets(styles);
+    devState.lastBuildError = null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Asset build failed";
+    devState.lastBuildError = message;
+    throw error;
+  }
+
+  return prepared;
+}
+
+function normalizeStyleAssets<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
+  outdir: string,
+): PreparedStyleAsset[] {
+  const legacy: BunStyleAsset[] = options.stylesPath
+    ? [
+        {
+          input: options.stylesPath,
+          route: "/styles.css",
+          output: join(outdir, "styles.css"),
+        },
+      ]
+    : [];
+  const styles = [...legacy, ...(options.assets?.styles ?? [])];
+
+  return styles.map((asset) => {
+    const route = asset.route ?? `/${asset.output ?? "styles.css"}`;
+    const output = asset.output
+      ? asset.output.startsWith(outdir)
+        ? asset.output
+        : join(outdir, asset.output)
+      : join(outdir, route.replace(/^\//, ""));
+
+    return {
+      input: asset.input,
+      route,
+      output,
+      build: asset.build,
+      watchPaths: watchPathsForAsset(asset),
+    };
+  });
+}
+
+async function buildStyleAssets(assets: PreparedStyleAsset[]): Promise<void> {
+  for (const asset of assets) {
+    await mkdir(dirname(asset.output), { recursive: true });
+
+    if (asset.build) {
+      await asset.build({ input: asset.input, output: asset.output, route: asset.route });
+      continue;
+    }
+
+    await Bun.write(asset.output, Bun.file(asset.input));
+  }
+}
+
+function watchPathsForAsset(asset: BunStyleAsset): string[] {
+  const paths = asset.watch ?? [asset.input];
+  return paths.map(watchRootForPath);
+}
+
+function watchRootForPath(path: string): string {
+  const globIndex = path.search(/[*{]/);
+  const stablePath = globIndex === -1 ? path : path.slice(0, globIndex);
+  const root =
+    stablePath.endsWith("/") || stablePath.endsWith("\\") ? stablePath : dirname(stablePath);
+  return root === "." ? "." : root;
 }
 
 function bootstrapFromEnvelopes<TProjection, TTrace>(
@@ -289,7 +429,30 @@ class DevReloadDelivery {
       socket.send("reload");
     }
   }
+
+  error(error: string): void {
+    for (const socket of this.#sockets) {
+      socket.send(JSON.stringify({ type: "build-error", error }));
+    }
+  }
 }
+
+type BunDevState = {
+  lastBuildError: string | null;
+};
+
+type PreparedAssets = {
+  styles: PreparedStyleAsset[];
+  byRoute: Map<string, PreparedStyleAsset>;
+};
+
+type PreparedStyleAsset = {
+  input: string;
+  route: string;
+  output: string;
+  watchPaths: string[];
+  build?: BunStyleAsset["build"];
+};
 
 class SocketDelivery<TProjection, TTrace> {
   readonly #viewsockets = new Map<string, Set<Bun.ServerWebSocket<unknown>>>();
