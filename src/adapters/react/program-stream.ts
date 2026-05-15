@@ -29,22 +29,37 @@ export type ProgramStreamOptions<TProjection, TTrace> = {
   bootstrap?: ProgramStreamBootstrap<TProjection, TTrace>;
   handlers: ProgramStreamHandlers<TProjection, TTrace>;
   environment?: ProgramStreamEnvironment;
+  reconnect?: ProgramStreamReconnectOptions;
 };
 
 export type ProgramStreamClient<TInput> = {
-  send: (input: TInput) => void;
+  send: (input: TInput) => string | undefined;
   close: () => void;
 };
 
 export type ProgramStreamEnvironment = {
   createSocket?: (url: string) => ProgramStreamSocket;
+  createClientInputId?: () => string;
   storage?: ProgramStreamStorage;
   streamUrl?: string;
+  timers?: ProgramStreamTimers;
 };
 
 export type ProgramStreamSocket = Pick<WebSocket, "addEventListener" | "close" | "send">;
 
 export type ProgramStreamStorage = Pick<Storage, "getItem" | "setItem">;
+
+export type ProgramStreamTimers = {
+  setTimeout: (handler: () => void, timeout: number) => unknown;
+  clearTimeout: (id: unknown) => void;
+};
+
+export type ProgramStreamReconnectOptions = {
+  enabled?: boolean;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  jitter?: boolean;
+};
 
 type ResumeState = {
   viewId: string;
@@ -55,86 +70,153 @@ export function connectProgramStream<TInput, TProjection, TTrace>(
   options: ProgramStreamOptions<TProjection, TTrace>,
 ): ProgramStreamClient<TInput> {
   const url = options.environment?.streamUrl ?? streamUrl();
-  const socket = options.environment?.createSocket?.(url) ?? new WebSocket(url);
+  const timers: ProgramStreamTimers = options.environment?.timers ?? {
+    setTimeout: (handler, timeout) => globalThis.setTimeout(handler, timeout),
+    clearTimeout: (id) => globalThis.clearTimeout(id as ReturnType<typeof globalThis.setTimeout>),
+  };
+  const reconnect = {
+    enabled: options.reconnect?.enabled ?? true,
+    baseDelayMs: options.reconnect?.baseDelayMs ?? 250,
+    maxDelayMs: options.reconnect?.maxDelayMs ?? 5000,
+    jitter: options.reconnect?.jitter ?? true,
+  };
+  let socket: ProgramStreamSocket | null = null;
   let viewId: string | null = null;
+  let connected = false;
+  let manuallyClosed = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: unknown = null;
 
   options.handlers.onConnectionState("connecting");
-
-  socket.addEventListener("open", () => {
-    options.handlers.onConnectionState("open");
-    const resume =
-      options.bootstrap ?? readResume(options.storageKey, options.environment?.storage);
-    sendEnvelope<TInput>(socket, {
-      type: "connect",
-      route: options.route,
-      params: options.params,
-      resume: resume
-        ? {
-            viewId: resume.viewId,
-            cursor: resume.cursor,
-          }
-        : undefined,
-    });
-  });
-
-  socket.addEventListener("close", () => {
-    options.handlers.onConnectionState("closed");
-  });
-
-  socket.addEventListener("error", () => {
-    options.handlers.onConnectionState("error");
-  });
-
-  socket.addEventListener("message", (event) => {
-    const envelope = JSON.parse(String(event.data)) as ServerEnvelope<TProjection, TTrace>;
-
-    persistCursor(options.storageKey, envelope, options.environment?.storage);
-
-    if (envelope.type === "connected") {
-      viewId = envelope.viewId;
-      options.handlers.onView(envelope.viewId, envelope.resumed, envelope.resume);
-      return;
-    }
-
-    if (envelope.type === "projection:update") {
-      options.handlers.onProjection(envelope);
-      return;
-    }
-
-    if (envelope.type === "projection:patch") {
-      options.handlers.onPatch?.(envelope);
-      return;
-    }
-
-    if (envelope.type === "trace:update") {
-      options.handlers.onTrace(envelope);
-      return;
-    }
-
-    if (envelope.type === "action:result") {
-      options.handlers.onActionResult(envelope);
-      return;
-    }
-
-    options.handlers.onError(envelope);
-  });
+  openSocket();
 
   return {
     send(input) {
-      if (!viewId) {
+      if (!viewId || !socket || !connected) {
         options.handlers.onError({
           type: "error",
-          message: "Cannot send before view is connected",
+          message: connected
+            ? "Cannot send before view is connected"
+            : "Cannot send while stream is disconnected",
+        });
+        return undefined;
+      }
+
+      const clientInputId = createClientInputId(options.environment);
+      sendEnvelope(socket, { type: "input", viewId, clientInputId, input });
+      return clientInputId;
+    },
+    close() {
+      manuallyClosed = true;
+      connected = false;
+
+      if (reconnectTimer !== null) {
+        timers.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
+      socket?.close();
+    },
+  };
+
+  function openSocket(): void {
+    socket = options.environment?.createSocket?.(url) ?? new WebSocket(url);
+
+    socket.addEventListener("open", () => {
+      connected = true;
+      reconnectAttempt = 0;
+      options.handlers.onConnectionState("open");
+      const resume =
+        options.bootstrap ?? readResume(options.storageKey, options.environment?.storage);
+
+      sendEnvelope<TInput>(socket as ProgramStreamSocket, {
+        type: "connect",
+        route: options.route,
+        params: options.params,
+        resume: resume
+          ? {
+              viewId: resume.viewId,
+              cursor: resume.cursor,
+            }
+          : undefined,
+      });
+    });
+
+    socket.addEventListener("close", () => {
+      connected = false;
+      options.handlers.onConnectionState("closed");
+      scheduleReconnect();
+    });
+
+    socket.addEventListener("error", () => {
+      connected = false;
+      options.handlers.onConnectionState("error");
+      scheduleReconnect();
+    });
+
+    socket.addEventListener("message", (event) => {
+      let envelope: ServerEnvelope<TProjection, TTrace>;
+
+      try {
+        envelope = JSON.parse(String(event.data)) as ServerEnvelope<TProjection, TTrace>;
+      } catch {
+        options.handlers.onError({
+          type: "error",
+          message: "Malformed server envelope",
         });
         return;
       }
 
-      sendEnvelope(socket, { type: "input", viewId, input });
-    },
-    close() {
-      socket.close();
-    },
-  };
+      persistCursor(options.storageKey, envelope, options.environment?.storage);
+
+      if (envelope.type === "connected") {
+        viewId = envelope.viewId;
+        options.handlers.onView(envelope.viewId, envelope.resumed, envelope.resume);
+        return;
+      }
+
+      if (envelope.type === "projection:update") {
+        options.handlers.onProjection(envelope);
+        return;
+      }
+
+      if (envelope.type === "projection:patch") {
+        options.handlers.onPatch?.(envelope);
+        return;
+      }
+
+      if (envelope.type === "trace:update") {
+        options.handlers.onTrace(envelope);
+        return;
+      }
+
+      if (envelope.type === "action:result") {
+        options.handlers.onActionResult(envelope);
+        return;
+      }
+
+      options.handlers.onError(envelope);
+    });
+  }
+
+  function scheduleReconnect(): void {
+    if (manuallyClosed || !reconnect.enabled || reconnectTimer !== null) {
+      return;
+    }
+
+    reconnectAttempt += 1;
+    const capped = Math.min(
+      reconnect.maxDelayMs,
+      reconnect.baseDelayMs * 2 ** Math.max(0, reconnectAttempt - 1),
+    );
+    const delay = reconnect.jitter ? Math.round(capped * (0.8 + Math.random() * 0.4)) : capped;
+
+    reconnectTimer = timers.setTimeout(() => {
+      reconnectTimer = null;
+      options.handlers.onConnectionState("connecting");
+      openSocket();
+    }, delay);
+  }
 }
 
 function sendEnvelope<TInput>(socket: ProgramStreamSocket, envelope: ClientEnvelope<TInput>): void {
@@ -144,6 +226,10 @@ function sendEnvelope<TInput>(socket: ProgramStreamSocket, envelope: ClientEnvel
 function streamUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/stream`;
+}
+
+function createClientInputId(environment?: ProgramStreamEnvironment): string {
+  return environment?.createClientInputId?.() ?? `input-${crypto.randomUUID()}`;
 }
 
 function readResume(

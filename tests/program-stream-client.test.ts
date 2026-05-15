@@ -29,6 +29,7 @@ describe("program stream client", () => {
       storageKey: "stream-state",
       environment: {
         streamUrl: "ws://test/stream",
+        createClientInputId: () => "client-input-test",
         createSocket: () => socket,
         storage,
       },
@@ -95,9 +96,111 @@ describe("program stream client", () => {
       JSON.stringify({
         type: "input",
         viewId: "view-new",
+        clientInputId: "client-input-test",
         input: { type: "view.toggle" },
       }),
     );
+  });
+
+  test("reconnects with latest cursor and reports malformed envelopes without killing recovery", () => {
+    const first = new FakeSocket();
+    const second = new FakeSocket();
+    const sockets = [first, second];
+    const timers = new FakeTimers();
+    const storage = new MemoryStorage({
+      "stream-state": JSON.stringify({
+        viewId: "view-old",
+        cursor: "cursor-old",
+      }),
+    });
+    const states: ConnectionState[] = [];
+    const errors: string[] = [];
+
+    connectProgramStream<TestMessage, TestProjection, TestTrace>({
+      route: "/contract",
+      params: { id: "main" },
+      storageKey: "stream-state",
+      reconnect: { baseDelayMs: 10, maxDelayMs: 10, jitter: false },
+      environment: {
+        streamUrl: "ws://test/stream",
+        createSocket: () => {
+          const socket = sockets.shift();
+
+          if (!socket) {
+            throw new Error("Unexpected socket creation");
+          }
+
+          return socket;
+        },
+        storage,
+        timers,
+      },
+      handlers: {
+        onConnectionState: (state) => states.push(state),
+        onView: () => undefined,
+        onProjection: () => undefined,
+        onPatch: () => undefined,
+        onTrace: () => undefined,
+        onActionResult: () => undefined,
+        onError: (error) => errors.push(error.message),
+      },
+    });
+
+    first.open();
+    first.emit({
+      type: "connected",
+      viewId: "view-new",
+      cursor: "cursor-1",
+      resumed: true,
+      resume: { status: "replayed", replayed: 1 },
+    });
+    first.emitRaw("{ nope");
+    first.close();
+
+    expect(errors).toEqual(["Malformed server envelope"]);
+    expect(timers.scheduled).toEqual([10]);
+
+    timers.runNext();
+    second.open();
+
+    expect(states).toEqual(["connecting", "open", "closed", "connecting", "open"]);
+    expect(second.sent[0]).toEqual(
+      JSON.stringify({
+        type: "connect",
+        route: "/contract",
+        params: { id: "main" },
+        resume: {
+          viewId: "view-new",
+          cursor: "cursor-1",
+        },
+      }),
+    );
+  });
+
+  test("rejects sends while disconnected", () => {
+    const socket = new FakeSocket();
+    const errors: string[] = [];
+    const client = connectProgramStream<TestMessage, TestProjection, TestTrace>({
+      route: "/contract",
+      params: { id: "main" },
+      reconnect: { enabled: false },
+      environment: {
+        streamUrl: "ws://test/stream",
+        createSocket: () => socket,
+      },
+      handlers: {
+        onConnectionState: () => undefined,
+        onView: () => undefined,
+        onProjection: () => undefined,
+        onPatch: () => undefined,
+        onTrace: () => undefined,
+        onActionResult: () => undefined,
+        onError: (error) => errors.push(error.message),
+      },
+    });
+
+    expect(client.send({ type: "view.toggle" })).toBeUndefined();
+    expect(errors).toEqual(["Cannot send while stream is disconnected"]);
   });
 
   test("uses bootstrap resume state before stored resume state", () => {
@@ -180,10 +283,40 @@ class FakeSocket implements ProgramStreamSocket {
     this.#dispatch("message", new MessageEvent("message", { data: JSON.stringify(value) }));
   }
 
+  emitRaw(value: string): void {
+    this.#dispatch("message", new MessageEvent("message", { data: value }));
+  }
+
   #dispatch(type: string, event: Event | MessageEvent): void {
     for (const listener of this.#listeners.get(type) ?? []) {
       listener(event);
     }
+  }
+}
+
+class FakeTimers {
+  readonly scheduled: number[] = [];
+  readonly #handlers: (() => void)[] = [];
+
+  setTimeout(handler: () => void, timeout: number): number {
+    this.scheduled.push(timeout);
+    this.#handlers.push(handler);
+    return this.#handlers.length;
+  }
+
+  clearTimeout(id: unknown): void {
+    const index = typeof id === "number" ? id - 1 : -1;
+
+    if (index >= 0) {
+      this.#handlers.splice(index, 1);
+      this.scheduled.splice(index, 1);
+    }
+  }
+
+  runNext(): void {
+    const handler = this.#handlers.shift();
+    this.scheduled.shift();
+    handler?.();
   }
 }
 
