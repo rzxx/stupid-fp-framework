@@ -1,6 +1,6 @@
-import type { JsonValue } from "./json";
-import type { ProjectionRegionSnapshot } from "./projection";
-import type { ProjectionPatchEnvelope } from "./stream";
+import type { JsonValue } from "../json";
+import type { ProjectionRegionSnapshot } from "../projection";
+import type { ProjectionPatchEnvelope } from "../stream";
 
 export function patchableRegions(
   regions: ProjectionRegionSnapshot[],

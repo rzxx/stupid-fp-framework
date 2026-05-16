@@ -1,8 +1,8 @@
-import type { ResumeResult, ServerEnvelope } from "./stream";
-import type { RuntimeStore } from "./store";
-import type { TraceSnapshot } from "./trace";
-import type { ViewCheckpoint } from "./view";
-import { sameParams } from "./runtime-observation";
+import type { RuntimeStore } from "../store";
+import type { ResumeResult, ServerEnvelope } from "../stream";
+import type { TraceSnapshot } from "../trace";
+import type { ViewCheckpoint } from "../view";
+import { sameParams } from "./observation";
 
 export async function resolveResume<TUIState, TProjection>(
   input: {

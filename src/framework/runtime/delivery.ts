@@ -1,6 +1,6 @@
-import type { DeliveryIntent, InvocationProtocolEvent } from "./invocation";
-import type { TraceSnapshot } from "./trace";
-import type { ServerEnvelope } from "./stream";
+import type { DeliveryIntent, InvocationProtocolEvent } from "../invocation";
+import type { ServerEnvelope } from "../stream";
+import type { TraceSnapshot } from "../trace";
 
 export type RuntimeResult<TProjection> = {
   envelopes: ServerEnvelope<TProjection, TraceSnapshot>[];

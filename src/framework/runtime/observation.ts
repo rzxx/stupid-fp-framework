@@ -1,5 +1,5 @@
-import type { ProjectionRegionSnapshot } from "./projection";
-import { resourceKeyId, type ResourceKey } from "./resource";
+import type { ProjectionRegionSnapshot } from "../projection";
+import { resourceKeyId, type ResourceKey } from "../resource";
 
 export type AffectedRegion = {
   viewId: string;
