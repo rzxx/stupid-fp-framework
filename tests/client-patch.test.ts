@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyRegionValuePatch,
+  applyRegionValuePatchAutomatically,
   createProjectionPatchApplier,
   type ProjectionPatchManifest,
 } from "../src/adapters/react/projection-patch";
@@ -104,6 +105,72 @@ describe("client projection patches", () => {
       count: 2,
       tracePanelOpen: true,
       traces: [{ traceId: "trace-1" }],
+    });
+  });
+
+  test("automatically replaces matching region fields and merges layout regions", () => {
+    const patch: ProjectionPatchEnvelope = {
+      type: "projection:patch",
+      viewId: "view-1",
+      cursor: "cursor-2",
+      projectionVersion: 2,
+      patch: {
+        kind: "region-values",
+        regions: [
+          {
+            id: "layout",
+            value: { title: "Updated", tracePanelOpen: true },
+            resources: [],
+          },
+          {
+            id: "items",
+            value: ["a", "b"],
+            resources: [],
+          },
+        ],
+      },
+    };
+
+    expect(
+      applyRegionValuePatchAutomatically(
+        { title: "Initial", tracePanelOpen: false, items: ["a"], local: "kept" },
+        patch,
+      ),
+    ).toEqual({
+      title: "Updated",
+      tracePanelOpen: true,
+      items: ["a", "b"],
+      local: "kept",
+    });
+  });
+
+  test("supports region-first manifest strategies", () => {
+    type Projection = { title: string; items: string[] };
+    const applyPatch = createProjectionPatchApplier<Projection>({
+      projectionVersion: 1,
+      regions: {
+        layout: { kind: "merge-fields" },
+        items: { kind: "replace-region" },
+      },
+    });
+    const patch: ProjectionPatchEnvelope = {
+      type: "projection:patch",
+      viewId: "view-1",
+      cursor: "cursor-2",
+      projectionVersion: 2,
+      projectionManifestVersion: 1,
+      patch: {
+        kind: "region-values",
+        regions: [
+          { id: "layout", value: { title: "Updated" }, resources: [] },
+          { id: "items", value: ["a", "b"], resources: [] },
+        ],
+      },
+    };
+
+    expect(applyPatch({ title: "Initial", items: ["a"] }, patch)).toEqual({
+      title: "Updated",
+      items: ["a", "b"],
     });
   });
 

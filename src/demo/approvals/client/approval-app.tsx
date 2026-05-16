@@ -1,11 +1,6 @@
 import { useMemo, useState } from "react";
-import {
-  createProjectionPatchApplier,
-  useProgramStream,
-  type ProgramStreamReactOptions,
-} from "../../../adapters/react";
+import { useProgramStream, type ProgramStreamReactOptions } from "../../../adapters/react";
 import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
-import { approvalProjectionPatchManifest } from "../projection-manifest";
 import type { ApprovalClientInput, ApprovalProjection } from "../types";
 
 export function ApprovalApp(props: {
@@ -20,7 +15,6 @@ export function ApprovalApp(props: {
       storageKey: "approval-stream",
       bootstrap: props.bootstrap,
       projectionTraces: (projection) => projection.traces,
-      applyPatch: createProjectionPatchApplier(approvalProjectionPatchManifest),
       router: { mode: "history" },
     };
   }, [props.bootstrap]);
