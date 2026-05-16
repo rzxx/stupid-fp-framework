@@ -211,7 +211,7 @@ const Deployment = Resource.define("Deployment")
   .key(Schema.Struct({ deploymentId: Schema.String }), {
     id: (params) => params.deploymentId,
   })
-  .load((params) =>
+  .loadEffect((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       return deployments.find(params.deploymentId);
@@ -223,7 +223,7 @@ const PendingDeployments = Resource.define("PendingDeployments")
   .key(Schema.Struct({ teamId: Schema.String }), {
     id: (params) => params.teamId,
   })
-  .load((params) =>
+  .loadEffect((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       return deployments.pendingForTeam(params.teamId);
@@ -243,7 +243,7 @@ const PendingDeployments = Resource.define("PendingDeployments")
   .key(Schema.Struct({ teamId: Schema.String }), {
     id: (params) => params.teamId,
   })
-  .load((params) =>
+  .loadEffect((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       return deployments.pendingVisibleToCurrentUser(params.teamId);
@@ -260,7 +260,7 @@ variants.
 ```ts
 const approveDeployment = Action.define("deployment.approve")
   .input({ deploymentId: DeploymentId })
-  .run((input, context) =>
+  .runEffect((input, context) =>
     Effect.gen(function* () {
       const user = yield* Auth.currentUser;
       const deployment = yield* Deployments.find(input.deploymentId);
@@ -314,7 +314,7 @@ const ApprovalScreen = Screen.define("approval.deployments")
   .regions({
     pendingDeployments: Region.replace(),
   })
-  .project((view, context) =>
+  .projectEffect((view, context) =>
     Effect.gen(function* () {
       return {
         pending: yield* context.region("pendingDeployments", () =>
@@ -348,7 +348,7 @@ but core framework concepts should read like declarations.
 ```ts
 const startAgentRun = Action.define("agent.startRun")
   .input({ taskId: TaskId })
-  .run(function* ({ taskId }) {
+  .runEffect(function* ({ taskId }) {
     const user = yield* Auth.currentUser;
 
     yield* Permissions.require(user, "agent:start", taskId);

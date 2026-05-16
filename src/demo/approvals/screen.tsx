@@ -43,7 +43,7 @@ export const approvalDeploymentsScreen: ScreenDefinition<
     selectedDeployment: Region.replace(),
     activeRuns: Region.replace(),
   })
-  .project((view, context) => {
+  .projectEffect((view, context) => {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;
       const layout = yield* approvalLayout(view, context);
@@ -88,7 +88,7 @@ export const approvalRunsScreen: ScreenDefinition<
     selectedDeployment: Region.replace(),
     activeRuns: Region.replace(),
   })
-  .project((view, context) => {
+  .projectEffect((view, context) => {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;
       const layout = yield* approvalLayout(view, context);

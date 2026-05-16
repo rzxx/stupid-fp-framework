@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { serveBunProgram, type ClientEnvelope, type ServerEnvelope } from "../src/framework";
+import { serveBunProgram } from "../src/bun";
+import type { ClientEnvelope, ServerEnvelope } from "../src/framework";
 
 type TestMessage = { type: "action.touch" };
 type TestProjection = { viewId: string; value: number };

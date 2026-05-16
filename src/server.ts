@@ -1,5 +1,7 @@
 import { join } from "node:path";
-import { JsonFileRuntimeStore, serveBunProgram, type TraceSnapshot } from "./framework";
+import { serveBunProgram } from "./bun";
+import { JsonFileRuntimeStore } from "./store";
+import type { TraceSnapshot } from "./trace";
 import { createApprovalRuntime } from "./demo/approvals/program";
 import type { ApprovalClientInput, ApprovalProjection } from "./demo/approvals/types";
 import { renderApprovalApp } from "./demo/approvals/client/render-approval";

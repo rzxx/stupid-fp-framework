@@ -192,7 +192,7 @@ describe("framework contract", () => {
       .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
         id: (params) => params.id,
       })
-      .load<TestEnvironment>(() => Effect.map(CounterService, (counter) => counter.value));
+      .loadEffect<TestEnvironment>(() => Effect.map(CounterService, (counter) => counter.value));
     const builtUI = UIState.define("built.ui")
       .init<UIState>(() => ({ selected: false }))
       .event<UIEvent>("view.toggle", toggleSchema, (state) => ({
@@ -201,7 +201,7 @@ describe("framework contract", () => {
       .build();
     const builtScreen = Screen.define("built.counter")
       .route("/built/:id", { params: Schema.Struct({ id: Schema.String }) })
-      .project((view: ViewContext<UIState>, context: ProjectionContext<TestEnvironment>) =>
+      .projectEffect((view: ViewContext<UIState>, context: ProjectionContext<TestEnvironment>) =>
         Effect.gen(function* () {
           const projection: Projection = {
             route: view.route,
@@ -348,7 +348,7 @@ describe("framework contract", () => {
       .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
         id: (params) => params.id,
       })
-      .load<never>((_params, key) => Effect.succeed(key.scope?.id ?? "missing"));
+      .loadEffect<never>((_params, key) => Effect.succeed(key.scope?.id ?? "missing"));
     const customKey = resourceKey<string>("CustomScoped", "main", "CustomScoped(main)", {
       partition: "one",
     });
@@ -543,7 +543,7 @@ describe("framework contract", () => {
         actions: [
           Action.define("action.refreshPrincipals")
             .input(Schema.Struct({ type: Schema.Literal("action.refreshPrincipals") }))
-            .run<void, InvocationContext>((_input, context) =>
+            .runEffect<void, InvocationContext>((_input, context) =>
               Effect.sync(() => {
                 values["principal-a"] = "a-after";
                 values["principal-b"] = "b-after";
@@ -636,6 +636,7 @@ describe("framework contract", () => {
       clientInputId: "client-input-1",
       ok: true,
     });
+    expect(result.protocolEvents?.map((event) => event.type)).toContain("action.lifecycle");
     expect(await store.readInputRecord("client-input-1")).toEqual({
       clientInputId: "client-input-1",
       viewId: connected.viewId,
@@ -747,7 +748,7 @@ describe("framework contract", () => {
         actions: [
           Action.define("action.whoami")
             .input(Schema.Struct({ type: Schema.Literal("action.whoami") }))
-            .run<{ principalId: string }, TestEnvironment | InvocationContext>(() =>
+            .runEffect<{ principalId: string }, TestEnvironment | InvocationContext>(() =>
               Effect.map(InvocationContext, (context) => ({
                 principalId: context.principal?.id ?? "anonymous",
               })),
@@ -1497,7 +1498,7 @@ function createCounterProgram(
     actions: [
       Action.define("action.increment")
         .input(incrementSchema)
-        .run<{ count: number }, TestEnvironment>((input, context) =>
+        .runEffect<{ count: number }, TestEnvironment>((input, context) =>
           Effect.gen(function* () {
             const counter = yield* CounterService;
             counter.value += input.amount;
@@ -1508,7 +1509,7 @@ function createCounterProgram(
         ),
       Action.define("action.fail")
         .input(failSchema)
-        .run(() => Effect.fail(actionFailure("contract failure"))),
+        .runEffect(() => Effect.fail(actionFailure("contract failure"))),
     ],
   });
 }
@@ -1557,7 +1558,7 @@ function createUnpatchableRegionRuntime(
     actions: [
       Action.define("action.increment")
         .input(incrementSchema)
-        .run<{ count: number }, TestEnvironment>((input, context) =>
+        .runEffect<{ count: number }, TestEnvironment>((input, context) =>
           Effect.gen(function* () {
             const counter = yield* CounterService;
             counter.value += input.amount;

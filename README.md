@@ -18,27 +18,24 @@ What if instead you wrote **one durable server program** and the browser rendere
 projection?
 
 ```
-typed input -> Effect transaction -> resource invalidation
+typed input -> transaction -> resource invalidation
 -> projection recomputation -> streamed patch/update -> causal trace
 ```
 
-No handwritten request/response API layer for app state. No client-side cache soup. No manual sync.
-Workflow truth lives in resources and actions; server-observed view/editing context lives in
-`UIState`; React renders projections and may keep disposable renderer state outside the program.
-Every meaningful input can leave a trace that explains why the UI changed.
+You write the program once. The runtime handles invalidation, projection, streaming, and tracing automatically.
 
 ---
 
 ## this is
 
-- A **Bun-hosted runtime with a Vite client pipeline** — Bun owns the program/stream host; Vite owns browser modules, CSS, React Refresh, and React Compiler wiring
-- **Effect-native workflow runtime** — typed, composable, testable server logic
+- **Promise-first by default** — author resources and actions with `async/await`
+- **Effect-native when you want it** — bring Effect knowledge for typed capabilities, dependency injection, and testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
 - **Program-owned state** — durable workflow truth stays in resources/actions; server-observed view/editing context is modeled as `UIState`
-- **Stateless-capable runtime** — view checkpoints and stream history can be restored from runtime stores instead of process memory
 - **Reactive by default** — actions invalidate resources, runtime pushes patches to all affected clients
 - **Typed program inputs** — actions, UI events, resource events, and system events have distinct jobs
 - **Trace-first** — program inputs explain validation, auth, effects, invalidation, recomputation, and streamed patches
+- **Modular by design** — adopt traces, resource tracking, or stores individually before buying the full runtime
 
 ## this is not
 
@@ -49,12 +46,22 @@ Every meaningful input can leave a trace that explains why the UI changed.
 
 ---
 
+## where this fits
+
+**Sweet spot:** workflow-heavy tools where the UI is a live projection of server state. Approval flows, incident consoles, operations dashboards, moderation queues, admin panels with live actions. Apps that need permissions, audit trails, long-running work, and the ability to answer "why did this change?"
+
+**Not the fit:** marketing sites, content pages, simple CRUD, or apps where request/response plus client caching is enough. If your UI doesn't react to server-side workflow changes, this is overkill.
+
+**How it differs:** instead of designing endpoints, managing client caches, and wiring invalidation by hand, you write one server program. The runtime tracks what each view reads, pushes patches when resources change, and records causal traces for every update. React stays your rendering layer — components, ecosystem, and local state all work as usual.
+
+---
+
 ## the idea in 30 seconds
 
 You define three things:
 
 1. **Resources** — the data your app cares about (e.g., `PendingDeployments`, `Deployment`, `AuditTrail`)
-2. **Actions** — things users can do (e.g., `approveDeployment`), with validation, auth, and effects
+2. **Actions** — things users can do (e.g., `approveDeployment`), with validation and effects
 3. **UI state + screens** — how view/editing state combines with resources into UI data, grouped into named `region`s
 
 The runtime wires them together. When an action runs, it invalidates resources. When a UI event
@@ -63,28 +70,18 @@ which views are affected, recomputes their projections, and pushes UI patches ov
 renders the projection and may keep renderer-owned state that the program cannot observe.
 
 ```ts
-class Deployments extends Context.Tag("Deployments")<
-  Deployments,
-  {
-    pending: (teamId: string) => Deployment[];
-    approve: (deploymentId: string) => Deployment;
-  }
->() {}
-
-// A resource — typed key + Effect-native loader
+// A resource — typed key + Promise loader
 const PendingDeployments = Resource.define("PendingDeployments")
   .value<Deployment[]>()
   .key(Schema.Struct({ teamId: Schema.String }), {
     id: (params) => params.teamId,
   })
-  .load((params) =>
-    Effect.gen(function* () {
-      const deployments = yield* Deployments;
-      return deployments.pending(params.teamId);
-    }),
-  );
+  .load(async (params) => {
+    const deployments = await getDeployments();
+    return deployments.pending(params.teamId);
+  });
 
-// An action — schema-backed input + Effect transaction
+// An action — schema-backed input + Promise transaction
 const approveDeployment = Action.define("action.approveDeployment")
   .input(
     Schema.Struct({
@@ -92,14 +89,11 @@ const approveDeployment = Action.define("action.approveDeployment")
       deploymentId: Schema.String,
     }),
   )
-  .run((msg, ctx) =>
-    Effect.gen(function* () {
-      const deployments = yield* Deployments;
-      const deployment = yield* Effect.sync(() => deployments.approve(msg.deploymentId));
-      ctx.invalidate(PendingDeployments.key({ teamId: deployment.teamId }));
-      ctx.invalidate(Deployment.key({ deploymentId: msg.deploymentId }));
-    }),
-  );
+  .run(async (msg, ctx) => {
+    const deployment = await deployments.approve(msg.deploymentId);
+    ctx.invalidate(PendingDeployments.key({ teamId: deployment.teamId }));
+    ctx.invalidate(Deployment.key({ deploymentId: msg.deploymentId }));
+  });
 
 // UI state — view/editing context, not durable workflow truth
 const approvalUI = UIState.define("approval.ui")
@@ -123,15 +117,11 @@ const screen = Screen.define("approval.deployments")
     layout: Region.merge(),
     pendingDeployments: Region.replace(),
   })
-  .project((view, ctx) =>
-    Effect.gen(function* () {
-      return {
-        pending: yield* ctx.region("pendingDeployments", () =>
-          ctx.resources.read(PendingDeployments.key({ teamId: view.params.teamId })),
-        ),
-      };
-    }),
-  );
+  .project(async (view, ctx) => ({
+    pending: await ctx.region("pendingDeployments", async () =>
+      ctx.read(PendingDeployments.key({ teamId: view.params.teamId })),
+    ),
+  }));
 
 const program = Program.define("approval")
   .resources(PendingDeployments, Deployment)
@@ -141,41 +131,66 @@ const program = Program.define("approval")
   .build();
 ```
 
-Application state has one ownership question: should the program observe it?
+### Effect-native authoring (advanced)
 
-Program-owned state includes durable domain truth through resources/actions and server-observed
-view/editing context through `UIState`. Use it when state affects projection, resume,
-authorization, sharing, collaboration, traceability, or server-side resource reads.
-
-Renderer-owned state lives outside the program and must be disposable. Use it only for local
-interaction mechanics the program should not observe, such as focus, measurement, hover, pointer
-position, animation phase, uncontrolled input composition before commit, or third-party widget
-internals.
-
-Protocol state is neither app truth nor renderer state. Optimistic overlays, pending input IDs,
-cursors, and reconnect state belong to the adapter/runtime protocol. Optimistic UI is a temporary
-projection overlay tied to a typed input, then confirmed or rolled back by the server projection,
-action result, or trace.
+When you need typed effects, capability injection, or testable server logic, switch to Effect:
 
 ```ts
-stream.ui.send(
-  { type: "ui.trace.toggle" },
+class Deployments extends Context.Tag("Deployments")<
+  Deployments,
   {
-    optimistic: (projection) => ({
-      ...projection,
-      tracePanelOpen: !projection.tracePanelOpen,
-    }),
-  },
-);
+    pending: (teamId: string) => Deployment[];
+    approve: (deploymentId: string) => Deployment;
+  }
+>() {}
 
+const PendingDeployments = Resource.define("PendingDeployments")
+  .value<Deployment[]>()
+  .key(Schema.Struct({ teamId: Schema.String }), {
+    id: (params) => params.teamId,
+  })
+  .loadEffect((params) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      return deployments.pending(params.teamId);
+    }),
+  );
+
+const approveDeployment = Action.define("action.approveDeployment")
+  .input(
+    Schema.Struct({
+      type: Schema.Literal("action.approveDeployment"),
+      deploymentId: Schema.String,
+    }),
+  )
+  .runEffect((msg, ctx) =>
+    Effect.gen(function* () {
+      const deployments = yield* Deployments;
+      const deployment = yield* Effect.sync(() => deployments.approve(msg.deploymentId));
+      ctx.invalidate(PendingDeployments.key({ teamId: deployment.teamId }));
+      ctx.invalidate(Deployment.key({ deploymentId: msg.deploymentId }));
+    }),
+  );
+```
+
+### State ownership
+
+Every piece of state falls into one bucket:
+
+- **Program-owned** — domain truth (resources/actions) and server-observed view context (`UIState`). Use when it affects projection, resume, auth, sharing, or traces.
+- **Renderer-owned** — focus, hover, measurement, animation, uncontrolled inputs. Must be disposable.
+- **Protocol state** — optimistic overlays, pending IDs, cursors, reconnect. Adapter/runtime machinery, not app truth.
+
+Optimistic UI is a temporary projection overlay tied to a typed input, confirmed or rolled back by the server.
+
+```ts
 stream.actions.run(
   { type: "action.approveDeployment", deploymentId },
-  {
-    optimistic: markDeploymentApproving(deploymentId),
-    settle: "projection",
-  },
+  { optimistic: markDeploymentApproving(deploymentId), settle: "projection" },
 );
 ```
+
+See [Model & Vocabulary](docs/design/model.md#state-ownership) for the full ownership rules.
 
 ---
 
@@ -198,13 +213,55 @@ bun check         # typecheck + lint + format check
 
 ---
 
+## adoption ladder
+
+You do not have to adopt the whole server-program model first. The package exposes opt-in
+entrypoints for smaller experiments:
+
+```ts
+import { TraceStore } from "stupid-fp-framework/trace";
+import { Resource, ResourceGraph } from "stupid-fp-framework/resource";
+import { MemoryRuntimeStore } from "stupid-fp-framework/store";
+import { Schema } from "stupid-fp-framework/effect";
+```
+
+Start small and climb:
+
+1. **Traces only** — use `TraceStore` to record browser-safe causal events
+2. **Resource tracking** — use `ResourceGraph` to track which named regions read which resources
+3. **Runtime stores** — experiment with checkpoints, cursors, envelopes, and observation indexes
+4. **Promise-first resources, actions, and screens** — author with `async/await` via `load`, `run`, and `project`
+5. **Stream/patch + React/Bun adapters** — add live transport and rendering when useful
+6. **Full durable program** — buy the whole model when you're ready
+
+```ts
+// Promise-first: no Effect required
+const Counter = Resource.define("Counter")
+  .value<number>()
+  .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
+    id: (params) => params.id,
+  })
+  .load(async (params) => params.id.length);
+
+const graph = new ResourceGraph();
+graph.register(Counter);
+
+const observed = await graph.observe(() =>
+  graph.regionAsync("counter", () => graph.readAsync(Counter.key({ id: "main" }))),
+);
+```
+
+Add Effect-native authoring (`stupid-fp-framework/effect`) when you need typed capabilities,
+dependency injection, or advanced error handling.
+
+---
+
 ## project status
 
 This is v0.0.0. It's a working prototype that passes its contract, integration, and acceptance tests. But it's:
 
 - Not optimized for production
 - Runtime stores are contract-tested development adapters, not production durability adapters yet
-- Stateless invocation is present but still early; Bun remains the main demo host
 - Not packaged for npm
 - Not API-stable (everything can change)
 - **Real enough to explore the idea** — run the demo, read the source, see if the paradigm clicks
@@ -222,9 +279,9 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Proposal](docs/proposal.md)** — the original pitch
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
 - **[Stage 8 Record](docs/stage-8-record.md)** — current invocation, recovery, and adapter contract implementation record
-- **[Framework State Review 6](docs/framework-state-review-6.md)** — patch, routing, dev server, and API direction
 - **[Stage 9 Record](docs/stage-9-record.md)** — implementation record for patch manifests, navigation, Bun assets, and builder APIs
 - **[Framework State Review 7](docs/framework-state-review-7.md)** — Stage 10 semantic hardening for state ownership, resource scopes, and trace-first positioning
+- **[Framework State Review 8](docs/framework-state-review-8.md)** — modular adoption direction for subpath exports and Promise-first APIs
 
 ---
 
@@ -248,9 +305,9 @@ That's the bet. It might be wrong. But it's the reason this repo exists.
 
 ## built with
 
+- **[Effect](https://effect.website)** — typed effects for advanced server logic (optional)
 - **[Bun](https://bun.sh)** — runtime, bundler, test runner, package manager
 - **[Vite](https://vite.dev)** — browser client pipeline for modules, CSS, React Refresh, and production assets
-- **[Effect](https://effect.website)** — typed effects for server logic
 - **[React 19](https://react.dev)** — UI rendering layer with adapter-owned root, provider, optimistic, and error-boundary conventions
 
 ---

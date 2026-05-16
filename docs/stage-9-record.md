@@ -42,8 +42,8 @@ builders, and document state placement rules.
 
 ## Remaining Follow-Ups
 
-- `Action.define(...).input(...).run(...)` already matches the builder style, but actions could
-  still gain named result/error metadata later.
+- Effect-native authoring now uses explicit `loadEffect`, `runEffect`, and `projectEffect` names;
+  actions could still gain named result/error metadata later.
 - Layout declarations are intentionally lightweight. A future pass can add layout-specific UI
   policy if the two-screen demo exposes enough pressure.
 - Rich in-flight action recovery after disconnect is still conservative. Client input IDs and input

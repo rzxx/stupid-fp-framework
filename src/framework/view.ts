@@ -1,4 +1,4 @@
-import type { ProjectionRegionSnapshot } from "./projection";
+import type { ProjectionRegionSnapshot } from "./observation";
 import type { UIStateDefinition } from "./ui-state";
 import type { InvocationPrincipal } from "./invocation";
 

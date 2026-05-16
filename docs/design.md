@@ -22,4 +22,5 @@ the direction review for patch protocol, routing/layouts, Bun-native dev DX, and
 [docs/framework-state-review-6.md](framework-state-review-6.md). The implementation record for
 that work is [docs/stage-9-record.md](stage-9-record.md). The current semantic hardening record for
 program-owned state, renderer-owned state, resource cache scopes, and trace-first positioning is
-[docs/framework-state-review-7.md](framework-state-review-7.md).
+[docs/framework-state-review-7.md](framework-state-review-7.md). The modular adoption direction is
+recorded in [docs/framework-state-review-8.md](framework-state-review-8.md).
