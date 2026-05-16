@@ -88,6 +88,10 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
     async fetch(request, server) {
       const url = new URL(request.url);
 
+      if (hasUnsafePathSegment(url.pathname)) {
+        return new Response("Bad request", { status: 400 });
+      }
+
       if (url.pathname === "/stream") {
         if (server.upgrade(request, { data: { kind: "stream" as const } })) {
           return;
@@ -486,6 +490,18 @@ function isStaticAssetPath(pathname: string): boolean {
 
 function isViteTransformPath(pathname: string): boolean {
   return /\.[cm]?[tj]sx?$/i.test(pathname);
+}
+
+function hasUnsafePathSegment(pathname: string): boolean {
+  let decoded: string;
+
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return true;
+  }
+
+  return decoded.includes("\0") || decoded.split("/").includes("..");
 }
 
 function replaceClientScript(html: string, entry: string): string {

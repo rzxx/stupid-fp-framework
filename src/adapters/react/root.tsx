@@ -21,7 +21,7 @@ export function mountProgramReact<TBootstrap>(options: ProgramReactRootOptions<T
     onUncaughtError: options.onUncaughtError,
   };
 
-  if (options.bootstrap && options.root.hasChildNodes()) {
+  if (options.bootstrap !== undefined && options.root.hasChildNodes()) {
     return hydrateRoot(options.root, app, rootOptions);
   }
 

@@ -232,12 +232,14 @@ describe("Bun host stream delivery", () => {
       const html = await htmlResponse.text();
       const clientResponse = await fetch(`http://localhost:${server.port}/client.ts`);
       const faviconResponse = await fetch(`http://localhost:${server.port}/favicon.svg`);
+      const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
 
       expect(html).toContain("/@vite/client");
       expect(html).toContain("/client.ts");
       expect(await clientResponse.text()).toContain("vite host test");
       expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
       expect(await faviconResponse.text()).toContain("<svg>dev</svg>");
+      expect(traversalResponse.status).not.toBe(200);
     } finally {
       server.stop(true);
     }
@@ -280,11 +282,13 @@ describe("Bun host stream delivery", () => {
 
       const scriptResponse = await fetch(`http://localhost:${server.port}${scriptPath}`);
       const faviconResponse = await fetch(`http://localhost:${server.port}/favicon.svg`);
+      const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
 
       expect(scriptPath).toMatch(/^\/assets\//);
       expect(await scriptResponse.text()).toContain("vite production host test");
       expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
       expect(await faviconResponse.text()).toContain("<svg>production</svg>");
+      expect(traversalResponse.status).not.toBe(200);
     } finally {
       server.stop(true);
     }
