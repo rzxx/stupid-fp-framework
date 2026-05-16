@@ -338,7 +338,7 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
     mode: resolved.config.mode,
     appType: "custom",
     clearScreen: false,
-    logLevel: "error",
+    logLevel: Bun.env.NODE_ENV === "test" ? "error" : "info",
     server: {
       hmr: true,
       strictPort: false,
@@ -352,6 +352,9 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
     },
   });
   await server.listen();
+  if (Bun.env.NODE_ENV !== "test") {
+    server.printUrls();
+  }
 
   const runner = resolved.vite.createServerModuleRunner(server.environments.ssr);
   const origin = localOrigin(server);
