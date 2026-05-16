@@ -67,7 +67,17 @@ export const Action = {
     return {
       input<TInput extends { type: TType }>(schema: FrameworkSchema<TInput>) {
         return {
-          run<TResult extends JsonValue | void = void, R = never>(
+          run<TResult extends JsonValue | void = void>(
+            run: (input: TInput, context: ActionContext) => TResult | Promise<TResult>,
+          ): ActionDefinition<never, TInput, TResult> {
+            return defineAction(type, acceptsSchema(schema), (input, context) =>
+              Effect.tryPromise({
+                try: () => Promise.resolve(run(input, context)),
+                catch: normalizeAsyncActionFailure,
+              }),
+            );
+          },
+          runEffect<TResult extends JsonValue | void = void, R = never>(
             run: (input: TInput, context: ActionContext) => ActionEffect<TResult, R>,
           ): ActionDefinition<R, TInput, TResult> {
             return defineAction(type, acceptsSchema(schema), run);

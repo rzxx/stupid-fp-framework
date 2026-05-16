@@ -153,7 +153,32 @@ class ResourceBuilder<TValue> {
     },
   ) {
     return {
-      load: <R>(
+      load: (
+        load: (params: TParams, key: ResourceKey<TValue>) => TValue | Promise<TValue>,
+      ): ResourceDeclaration<never, TParams, TValue> => ({
+        type: this.#type,
+        scope: this.#scope,
+        key: (params) => {
+          const id = options.id(params);
+          return resourceKey(
+            this.#type,
+            id,
+            options.label?.(params) ?? `${this.#type}(${id})`,
+            params,
+          );
+        },
+        load: (key) =>
+          Effect.tryPromise({
+            try: () => Promise.resolve(load(key.params as TParams, key as ResourceKey<TValue>)),
+            catch: (error) =>
+              resourceFailure(
+                this.#type,
+                error instanceof Error ? error.message : "Resource loader failed",
+                key.id,
+              ),
+          }),
+      }),
+      loadEffect: <R>(
         load: (
           params: TParams,
           key: ResourceKey<TValue>,

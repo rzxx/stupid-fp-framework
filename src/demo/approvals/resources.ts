@@ -18,7 +18,7 @@ export const PendingDeploymentsResource = Resource.define("PendingDeployments")
   .key<TeamResourceParams>(teamParams, {
     id: (params) => params.teamId,
   })
-  .load<ApprovalEnvironment>((params) =>
+  .loadEffect<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       return deployments.pendingForTeam(params.teamId);
@@ -30,7 +30,7 @@ export const DeploymentResource = Resource.define("Deployment")
   .key<DeploymentResourceParams>(deploymentParams, {
     id: (params) => params.deploymentId,
   })
-  .load<ApprovalEnvironment>((params) =>
+  .loadEffect<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       return deployments.find(params.deploymentId);
@@ -42,7 +42,7 @@ export const AuditTrailResource = Resource.define("AuditTrail")
   .key<DeploymentResourceParams>(deploymentParams, {
     id: (params) => params.deploymentId,
   })
-  .load<ApprovalEnvironment>((params) =>
+  .loadEffect<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const audit = yield* Audit;
       return audit.forDeployment(params.deploymentId);
@@ -54,7 +54,7 @@ export const ActiveDeploymentRunsResource = Resource.define("ActiveDeploymentRun
   .key<TeamResourceParams>(teamParams, {
     id: (params) => params.teamId,
   })
-  .load<ApprovalEnvironment>((params) =>
+  .loadEffect<ApprovalEnvironment>((params) =>
     Effect.gen(function* () {
       const runs = yield* DeploymentRuns;
       return runs.forTeam(params.teamId);

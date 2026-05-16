@@ -14,7 +14,7 @@ export const approveDeploymentAction: ActionDefinition<
       deploymentId: Schema.String,
     }),
   )
-  .run((input, context) =>
+  .runEffect((input, context) =>
     Effect.gen(function* () {
       context.traces.add(context.trace, "validation", "input validated", {
         deploymentId: input.deploymentId,

@@ -3,15 +3,12 @@ import { Effect } from "./effect";
 import {
   defaultInvocationContext,
   InvocationContext,
-  type DeliveryIntent,
   type InvocationContextValue,
-  type InvocationProtocolEvent,
 } from "./invocation";
-import type { JsonValue } from "./json";
 import { actionHooks, resourceHooks, routeHooks, viewHooks, traceHooks } from "./plugin";
 import type { SystemEvent } from "./program-input";
 import { screenRouteDefinition, screenRoutePattern, type Program } from "./program";
-import { resourceKeyId, serializeResourceKey, type ResourceKey } from "./resource";
+import { serializeResourceKey, type ResourceKey } from "./resource";
 import type { ProjectionRegionSnapshot } from "./projection";
 import {
   MemoryRuntimeStore,
@@ -19,25 +16,17 @@ import {
   runtimeStoreError,
   type RuntimeStore,
 } from "./store";
-import {
-  type ClientEnvelope,
-  type ProjectionPatchEnvelope,
-  type ResumeResult,
-  type ServerEnvelope,
-} from "./stream";
-import { LiveViewRegistry, type ViewCheckpoint, type ViewContext } from "./view";
+import { type ClientEnvelope, type ServerEnvelope } from "./stream";
+import { LiveViewRegistry, type ViewContext } from "./view";
 import { TraceStore, type TraceSnapshot } from "./trace";
+import { runtimeResult, type RuntimeResult } from "./runtime-delivery";
+import { affectedRegions, type AffectedRegion } from "./runtime-observation";
+import { patchableRegions } from "./runtime-patch";
+import { resolveResume as resolveStoredResume } from "./runtime-resume";
 
-export type RuntimeResult<TProjection> = {
-  envelopes: ServerEnvelope<TProjection, TraceSnapshot>[];
-  protocolEvents?: InvocationProtocolEvent[];
-  deliveryIntents?: DeliveryIntent<ServerEnvelope<TProjection, TraceSnapshot>>[];
-};
+export type { RuntimeResult } from "./runtime-delivery";
 
-export type AffectedRegion = {
-  viewId: string;
-  regions: ProjectionRegionSnapshot[];
-};
+export type { AffectedRegion } from "./runtime-observation";
 
 export type Runtime<
   TUIEvent extends { type: string },
@@ -153,16 +142,31 @@ export function createRuntime<
     let observed;
 
     try {
-      observed = await program.resourceGraph.observe(() =>
-        runEffect(
+      observed = await program.resourceGraph.observe(() => {
+        const traceReader = traces.scoped(viewId);
+
+        if (screen.projectAsync) {
+          return screen.projectAsync(view, {
+            traces: traceReader,
+            read: (key) => runEffect(program.resourceGraph.read(key), invocation),
+            region: (id, read) => program.resourceGraph.regionAsync(id, read),
+          });
+        }
+
+        if (!screen.project) {
+          throw new Error(`No projection registered for route: ${view.route}`);
+        }
+
+        return runEffect(
           screen.project(view, {
             resources: program.resourceGraph,
-            traces: traces.scoped(viewId),
+            traces: traceReader,
+            read: (key) => program.resourceGraph.read(key),
             region: (id, read) => program.resourceGraph.region(id, read),
           }),
           invocation,
-        ),
-      );
+        );
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Projection failed";
 
@@ -244,7 +248,11 @@ export function createRuntime<
       };
       invocation.fanoutScope = scopedFanout(connectRoute.route, connectRoute.params, invocation);
       const resume = envelope.resume
-        ? await resolveResume(connectRoute.route, connectRoute.params, envelope.resume)
+        ? await resolveStoredResume(
+            { route: connectRoute.route, params: connectRoute.params, resume: envelope.resume },
+            store,
+            runStore,
+          )
         : null;
       await restoreCheckpointedViews();
       const view = resume?.snapshot
@@ -674,52 +682,6 @@ export function createRuntime<
     return patch;
   }
 
-  async function resolveResume(
-    route: string,
-    params: Record<string, string>,
-    resume: { viewId: string; cursor: string },
-  ): Promise<{
-    snapshot?: ViewCheckpoint<TUIState>;
-    result: ResumeResult;
-    replay?: ServerEnvelope<TProjection, TraceSnapshot>[];
-  }> {
-    const snapshot = await runStore(() => store.loadView(resume.viewId));
-
-    if (!snapshot) {
-      return { result: { status: "rejected", reason: "missing-view" } };
-    }
-
-    if (snapshot.route !== route || !sameParams(snapshot.params, params)) {
-      return { result: { status: "rejected", reason: "route-mismatch" } };
-    }
-
-    const cursorExists = await runStore(() =>
-      store.hasEnvelopeCursor(resume.viewId, resume.cursor),
-    );
-
-    if (!cursorExists) {
-      return {
-        snapshot,
-        result: { status: "refreshed", reason: "stale-cursor" },
-      };
-    }
-
-    const replay = await runStore(() => store.readEnvelopesAfter(resume.viewId, resume.cursor));
-
-    if (replay.length === 0) {
-      return {
-        snapshot,
-        result: { status: "refreshed", reason: "current-cursor" },
-      };
-    }
-
-    return {
-      snapshot,
-      result: { status: "replayed", replayed: replay.length },
-      replay: replay.map((entry) => entry.envelope),
-    };
-  }
-
   async function restoreViewForReceive(viewId: string): Promise<ViewContext<TUIState> | undefined> {
     const snapshot = await runStore(() => store.loadView(viewId));
 
@@ -908,122 +870,6 @@ export function createRuntime<
       principal: view.principal ?? invocation.principal,
     };
   }
-}
-
-function sameParams(left: Record<string, string>, right: Record<string, string>): boolean {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-
-  if (leftKeys.length !== rightKeys.length) {
-    return false;
-  }
-
-  return leftKeys.every((key) => left[key] === right[key]);
-}
-
-function affectedRegions(
-  views: { viewId: string; observedRegions: ProjectionRegionSnapshot[] }[],
-  keys: readonly ResourceKey[],
-): AffectedRegion[] {
-  const invalidated = new Set(keys.map(resourceKeyId));
-  const affected: AffectedRegion[] = [];
-
-  for (const view of views) {
-    const regions = view.observedRegions.filter((region) =>
-      region.resources.some((resource) => invalidated.has(`${resource.type}:${resource.id}`)),
-    );
-
-    if (regions.length > 0) {
-      affected.push({ viewId: view.viewId, regions });
-    }
-  }
-
-  return affected;
-}
-
-function runtimeResult<TProjection>(
-  envelopes: ServerEnvelope<TProjection, TraceSnapshot>[],
-): RuntimeResult<TProjection> {
-  return {
-    envelopes,
-    protocolEvents: envelopes.map(protocolEventForEnvelope),
-    deliveryIntents: envelopes.flatMap((envelope) =>
-      "viewId" in envelope && envelope.viewId ? [{ viewId: envelope.viewId, envelope }] : [],
-    ),
-  };
-}
-
-function protocolEventForEnvelope<TProjection>(
-  envelope: ServerEnvelope<TProjection, TraceSnapshot>,
-): InvocationProtocolEvent {
-  if (envelope.type === "connected") {
-    return { type: "view.connected", viewId: envelope.viewId };
-  }
-
-  if (envelope.type === "projection:update") {
-    return {
-      type: "projection.updated",
-      viewId: envelope.viewId,
-      projectionVersion: envelope.projectionVersion,
-    };
-  }
-
-  if (envelope.type === "projection:patch") {
-    return {
-      type: "projection.patched",
-      viewId: envelope.viewId,
-      projectionVersion: envelope.projectionVersion,
-      regions: envelope.patch.regions.map((region) => region.id),
-    };
-  }
-
-  if (envelope.type === "action:result") {
-    return {
-      type: "action.result",
-      viewId: envelope.viewId,
-      ok: envelope.ok,
-      clientInputId: envelope.clientInputId,
-    };
-  }
-
-  if (envelope.type === "action:lifecycle") {
-    return {
-      type: "action.result",
-      viewId: envelope.viewId,
-      ok: envelope.stage !== "failed",
-      clientInputId: envelope.clientInputId,
-    };
-  }
-
-  if (envelope.type === "trace:update") {
-    return {
-      type: "trace.updated",
-      viewId: envelope.viewId,
-      traceId: envelope.trace.traceId,
-    };
-  }
-
-  return { type: "runtime.error", viewId: envelope.viewId, message: envelope.message };
-}
-
-function patchableRegions(
-  regions: ProjectionRegionSnapshot[],
-): ProjectionPatchEnvelope["patch"]["regions"] | null {
-  const patchRegions: ProjectionPatchEnvelope["patch"]["regions"] = [];
-
-  for (const region of regions) {
-    if (region.value === undefined) {
-      return null;
-    }
-
-    patchRegions.push({
-      id: region.id,
-      value: region.value as JsonValue,
-      resources: region.resources,
-    });
-  }
-
-  return patchRegions;
 }
 
 function isNavigateInput(value: unknown): value is {

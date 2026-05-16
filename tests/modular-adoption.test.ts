@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, normalize, relative } from "node:path";
 import { Action, createRuntime, Program, Screen, UIState } from "stupid-fp-framework/runtime";
-import { Effect, Schema } from "stupid-fp-framework/effect";
+import { Schema } from "stupid-fp-framework/effect";
 import { Resource, ResourceGraph } from "stupid-fp-framework/resource";
 import { MemoryRuntimeStore } from "stupid-fp-framework/store";
 import type { ProjectionPatchEnvelope, ServerEnvelope } from "stupid-fp-framework/stream";
@@ -52,7 +52,7 @@ describe("modular adoption surface", () => {
       .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
         id: (params) => params.id,
       })
-      .loadAsync((params) => Promise.resolve(params.id.length));
+      .load((params) => Promise.resolve(params.id.length));
 
     graph.register(Counter);
 
@@ -157,7 +157,7 @@ describe("modular adoption surface", () => {
       .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
         id: (params) => params.id,
       })
-      .loadAsync(() => count);
+      .load(() => count);
     const countKey = Count.key({ id: "main" });
     const program = Program.define("async-api")
       .resources(Count)
@@ -165,21 +165,16 @@ describe("modular adoption surface", () => {
       .screens<Projection>(
         Screen.define("async.counter")
           .route("/async", { params: Schema.Struct({}) })
-          .project((_view, context) =>
-            Effect.map(
-              context.region("count", () => context.resources.read(countKey)),
-              (next) => ({
-                count: next,
-              }),
-            ),
-          ),
+          .project(async (_view, context) => ({
+            count: await context.region("count", () => context.read(countKey)),
+          })),
       )
       .actions<Input>(
         Action.define("action.increment")
           .input<Extract<Input, { type: "action.increment" }>>(
             Schema.Struct({ type: Schema.Literal("action.increment"), amount: Schema.Number }),
           )
-          .runAsync<{ count: number }>(async (input, context) => {
+          .run<{ count: number }>(async (input, context) => {
             count += input.amount;
             context.invalidate(countKey);
             return { count };
@@ -188,7 +183,7 @@ describe("modular adoption surface", () => {
           .input<Extract<Input, { type: "action.fail" }>>(
             Schema.Struct({ type: Schema.Literal("action.fail") }),
           )
-          .runAsync(() => Action.reject("async rejected")),
+          .run(() => Action.reject("async rejected")),
       )
       .build();
     const runtime = createRuntime(program);

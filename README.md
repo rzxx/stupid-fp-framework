@@ -76,7 +76,7 @@ const PendingDeployments = Resource.define("PendingDeployments")
   .key(Schema.Struct({ teamId: Schema.String }), {
     id: (params) => params.teamId,
   })
-  .loadAsync(async (params) => {
+  .load(async (params) => {
     const deployments = await getDeployments();
     return deployments.pending(params.teamId);
   });
@@ -89,7 +89,7 @@ const approveDeployment = Action.define("action.approveDeployment")
       deploymentId: Schema.String,
     }),
   )
-  .runAsync(async (msg, ctx) => {
+  .run(async (msg, ctx) => {
     const deployment = await deployments.approve(msg.deploymentId);
     ctx.invalidate(PendingDeployments.key({ teamId: deployment.teamId }));
     ctx.invalidate(Deployment.key({ deploymentId: msg.deploymentId }));
@@ -119,7 +119,7 @@ const screen = Screen.define("approval.deployments")
   })
   .project(async (view, ctx) => ({
     pending: await ctx.region("pendingDeployments", async () =>
-      ctx.resources.read(PendingDeployments.key({ teamId: view.params.teamId })),
+      ctx.read(PendingDeployments.key({ teamId: view.params.teamId })),
     ),
   }));
 
@@ -149,7 +149,7 @@ const PendingDeployments = Resource.define("PendingDeployments")
   .key(Schema.Struct({ teamId: Schema.String }), {
     id: (params) => params.teamId,
   })
-  .load((params) =>
+  .loadEffect((params) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       return deployments.pending(params.teamId);
@@ -163,7 +163,7 @@ const approveDeployment = Action.define("action.approveDeployment")
       deploymentId: Schema.String,
     }),
   )
-  .run((msg, ctx) =>
+  .runEffect((msg, ctx) =>
     Effect.gen(function* () {
       const deployments = yield* Deployments;
       const deployment = yield* Effect.sync(() => deployments.approve(msg.deploymentId));
@@ -230,7 +230,7 @@ Start small and climb:
 1. **Traces only** — use `TraceStore` to record browser-safe causal events
 2. **Resource tracking** — use `ResourceGraph` to track which named regions read which resources
 3. **Runtime stores** — experiment with checkpoints, cursors, envelopes, and observation indexes
-4. **Promise-first resources and actions** — author with `async/await` via `loadAsync` and `runAsync`
+4. **Promise-first resources, actions, and screens** — author with `async/await` via `load`, `run`, and `project`
 5. **Stream/patch + React/Bun adapters** — add live transport and rendering when useful
 6. **Full durable program** — buy the whole model when you're ready
 
@@ -241,7 +241,7 @@ const Counter = Resource.define("Counter")
   .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
     id: (params) => params.id,
   })
-  .loadAsync(async (params) => params.id.length);
+  .load(async (params) => params.id.length);
 
 const graph = new ResourceGraph();
 graph.register(Counter);
@@ -292,7 +292,7 @@ This project is "stupid" in the sense that it challenges the complexity we've ac
 The modern workflow stack demands you think about: client state, server state, cache invalidation,
 API design, loading states, optimistic updates, revalidation, stale-while-revalidate, suspense
 boundaries, error boundaries, request waterfalls, background jobs, audit logs, and "why did this
- happen?" debugging.
+happen?" debugging.
 
 What if instead you just didn't?
 

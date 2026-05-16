@@ -1,7 +1,7 @@
 import type { Effect } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
 import type { ProjectionRegionSnapshot } from "./observation";
-import type { ResourceFailure, ResourceGraph } from "./resource";
+import type { ResourceFailure, ResourceGraph, ResourceKey } from "./resource";
 import { defineRoute, type RouteDefinition } from "./route";
 import type { ViewContext } from "./view";
 import type { TraceReader } from "./trace";
@@ -48,10 +48,17 @@ export type ProjectionFailure = {
 export type ProjectionContext<R> = {
   resources: ResourceGraph<R>;
   traces: TraceReader;
+  read: <TValue>(key: ResourceKey<TValue>) => Effect.Effect<TValue, ResourceFailure, R>;
   region: <TValue, E>(
     id: string,
     read: () => Effect.Effect<TValue, E, R>,
   ) => Effect.Effect<TValue, E, R>;
+};
+
+export type AsyncProjectionContext = {
+  traces: TraceReader;
+  read: <TValue>(key: ResourceKey<TValue>) => Promise<TValue>;
+  region: <TValue>(id: string, read: () => Promise<TValue> | TValue) => Promise<TValue>;
 };
 
 export type LayoutDefinition = {
@@ -62,10 +69,14 @@ export type ScreenDefinition<R, TUIState, TProjection> = {
   route: string | RouteDefinition;
   layout?: LayoutDefinition;
   patchManifest?: ProjectionPatchManifest<TProjection>;
-  project: (
+  project?: (
     view: ViewContext<TUIState>,
     context: ProjectionContext<R>,
   ) => Effect.Effect<TProjection, ProjectionFailure | ResourceFailure, R>;
+  projectAsync?: (
+    view: ViewContext<TUIState>,
+    context: AsyncProjectionContext,
+  ) => Promise<TProjection> | TProjection;
 };
 
 export const Layout = {
@@ -143,7 +154,25 @@ class ScreenBuilder<R = never, TUIState = never, TProjection = never> {
     return this as unknown as ScreenBuilder<R, TUIState, TNextProjection>;
   }
 
-  project<TR, TNextUIState, TNextProjection>(
+  project<TNextUIState, TNextProjection>(
+    project: (
+      view: ViewContext<TNextUIState>,
+      context: AsyncProjectionContext,
+    ) => Promise<TNextProjection> | TNextProjection,
+  ): ScreenDefinition<never, TNextUIState, TNextProjection> {
+    if (!this.#route) {
+      throw new Error(`Screen ${this.#id} must define a route before project()`);
+    }
+
+    return {
+      route: this.#route,
+      layout: this.#layout,
+      patchManifest: this.#patchManifest as unknown as ProjectionPatchManifest<TNextProjection>,
+      projectAsync: project,
+    };
+  }
+
+  projectEffect<TR, TNextUIState, TNextProjection>(
     project: (
       view: ViewContext<TNextUIState>,
       context: ProjectionContext<TR>,

@@ -36,6 +36,12 @@ export type InvocationProtocolEvent =
       clientInputId?: string;
     }
   | {
+      type: "action.lifecycle";
+      viewId: string;
+      stage: "started" | "committed" | "failed";
+      clientInputId?: string;
+    }
+  | {
       type: "trace.updated";
       viewId: string;
       traceId: string;

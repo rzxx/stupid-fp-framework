@@ -42,10 +42,17 @@ Developers should be able to adopt:
 Effect remains the internal execution substrate and the advanced authoring API. The first
 effect-free path is Promise authoring:
 
-- `Resource.define(...).loadAsync(...)`
+- `Resource.define(...).load(...)`
 - `ResourceGraph.readAsync(...)`
 - `ResourceGraph.regionAsync(...)`
-- `Action.define(...).input(...).runAsync(...)`
+- `Action.define(...).input(...).run(...)`
+- `Screen.define(...).project(...)`
+
+Effect-native authoring remains available through explicit names:
+
+- `Resource.define(...).loadEffect(...)`
+- `Action.define(...).input(...).runEffect(...)`
+- `Screen.define(...).projectEffect(...)`
 - `Action.reject(...)`
 
 This is additive. Existing Effect-native APIs stay valid.

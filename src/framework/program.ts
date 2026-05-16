@@ -7,6 +7,14 @@ import type { ScreenDefinition } from "./projection";
 import type { RouteDefinition } from "./route";
 import type { UIStateDefinition } from "./ui-state";
 
+export type ProgramShape = {
+  Env: unknown;
+  UI: unknown;
+  UIEvent: { type: string };
+  Action: { type: string };
+  Projection: unknown;
+};
+
 export type ProgramDefinition<
   R,
   TUIState,
@@ -24,11 +32,11 @@ export type ProgramDefinition<
 };
 
 export type Program<
-  R,
-  TUIState,
-  TUIEvent extends { type: string },
-  TActionInput extends { type: string },
-  TProjection,
+  R = unknown,
+  TUIState = unknown,
+  TUIEvent extends { type: string } = { type: string },
+  TActionInput extends { type: string } = { type: string },
+  TProjection = unknown,
 > = ProgramDefinition<R, TUIState, TUIEvent, TActionInput, TProjection> & {
   layer: Layer.Layer<R>;
   runtime: ManagedRuntime.ManagedRuntime<R, never>;
@@ -39,6 +47,8 @@ export type Program<
   screenByRoute: Map<string, ScreenDefinition<R, TUIState, TProjection>>;
   routes: RouteDefinition[];
 };
+
+export type AnyProgram = Program<unknown, unknown, { type: string }, { type: string }, unknown>;
 
 export function defineProgram<
   R,
@@ -84,6 +94,36 @@ export const Program = {
   },
 };
 
+export namespace Program {
+  export type Env<TProgram> =
+    TProgram extends Program<infer R, unknown, { type: string }, { type: string }, unknown>
+      ? R
+      : never;
+  export type UI<TProgram> =
+    TProgram extends Program<unknown, infer TUIState, { type: string }, { type: string }, unknown>
+      ? TUIState
+      : never;
+  export type UIEvent<TProgram> =
+    TProgram extends Program<unknown, unknown, infer TUIEvent, { type: string }, unknown>
+      ? TUIEvent
+      : never;
+  export type Action<TProgram> =
+    TProgram extends Program<unknown, unknown, { type: string }, infer TActionInput, unknown>
+      ? TActionInput
+      : never;
+  export type Input<TProgram> = UIEvent<TProgram> | Action<TProgram>;
+  export type Projection<TProgram> =
+    TProgram extends Program<
+      unknown,
+      unknown,
+      { type: string },
+      { type: string },
+      infer TProjection
+    >
+      ? TProjection
+      : never;
+}
+
 class ProgramBuilder<
   R = never,
   TUIState = never,
@@ -92,11 +132,11 @@ class ProgramBuilder<
   TProjection = never,
 > {
   readonly #id: string;
-  readonly #definition: ProgramBuilderStorage;
+  readonly #definition: ProgramBuilderStorage<R, TUIState, TUIEvent, TActionInput, TProjection>;
 
   constructor(
     id: string,
-    definition: ProgramBuilderStorage = {
+    definition: ProgramBuilderStorage<R, TUIState, TUIEvent, TActionInput, TProjection> = {
       resources: [],
       screens: [],
       actions: [],
@@ -113,7 +153,7 @@ class ProgramBuilder<
     return new ProgramBuilder(this.#id, {
       ...this.#definition,
       layer,
-    });
+    } as unknown as ProgramBuilderStorage<TR, TUIState, TUIEvent, TActionInput, TProjection>);
   }
 
   plugins(
@@ -140,7 +180,13 @@ class ProgramBuilder<
     return new ProgramBuilder(this.#id, {
       ...this.#definition,
       uiState,
-    });
+    } as unknown as ProgramBuilderStorage<
+      R,
+      TNextUIState,
+      TNextUIEvent,
+      TActionInput,
+      TProjection
+    >);
   }
 
   screens<TNextProjection>(
@@ -167,23 +213,29 @@ class ProgramBuilder<
     }
 
     return defineProgram({
-      layer: this.#definition.layer as Layer.Layer<R> | undefined,
-      plugins: this.#definition.plugins as FrameworkPlugin<R>[],
-      resources: this.#definition.resources as ResourceDefinition<R, unknown>[],
-      uiState: this.#definition.uiState as UIStateDefinition<TUIState, TUIEvent>,
-      screens: this.#definition.screens as ScreenDefinition<R, TUIState, TProjection>[],
-      actions: this.#definition.actions as ActionDefinition<R, TActionInput, JsonValue | void>[],
+      layer: this.#definition.layer,
+      plugins: this.#definition.plugins,
+      resources: this.#definition.resources,
+      uiState: this.#definition.uiState,
+      screens: this.#definition.screens,
+      actions: this.#definition.actions,
     });
   }
 }
 
-type ProgramBuilderStorage = {
-  layer?: unknown;
-  resources: unknown[];
-  uiState?: unknown;
-  screens: unknown[];
-  actions: unknown[];
-  plugins: unknown[];
+type ProgramBuilderStorage<
+  R,
+  TUIState,
+  TUIEvent extends { type: string },
+  TActionInput extends { type: string },
+  TProjection,
+> = {
+  layer?: Layer.Layer<R>;
+  resources: ResourceDefinition<R, unknown>[];
+  uiState?: UIStateDefinition<TUIState, TUIEvent>;
+  screens: ScreenDefinition<R, TUIState, TProjection>[];
+  actions: ActionDefinition<R, TActionInput, JsonValue | void>[];
+  plugins: FrameworkPlugin<R>[];
 };
 
 export function screenRoutePattern<R, TUIState, TProjection>(
