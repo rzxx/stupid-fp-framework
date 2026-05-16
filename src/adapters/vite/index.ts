@@ -220,76 +220,87 @@ export async function serveViteProgram<TInput, TProjection, TTrace>(
   });
   const outDir = resolvedOutDir(resolved.config);
   const program = await prepareProgram<TInput, TProjection, TTrace>(resolved, outDir, mode);
+  let server: Bun.Server<BunSocketData>;
 
-  const server = Bun.serve<BunSocketData>({
-    port: options.port,
-    async fetch(request, bunServer) {
-      const url = new URL(request.url);
+  try {
+    server = Bun.serve<BunSocketData>({
+      port: options.port,
+      async fetch(request, bunServer) {
+        const url = new URL(request.url);
 
-      if (hasUnsafePathSegment(url.pathname)) {
-        return new Response("Bad request", { status: 400 });
-      }
-
-      if (url.pathname.startsWith("/.vite/")) {
-        return new Response("Not found", { status: 404 });
-      }
-
-      if (url.pathname === "/stream") {
-        if (bunServer.upgrade(request, { data: { kind: "stream" as const } })) {
-          return;
+        if (hasUnsafePathSegment(url.pathname)) {
+          return new Response("Bad request", { status: 400 });
         }
 
-        return new Response("WebSocket upgrade failed", { status: 400 });
-      }
+        if (url.pathname.startsWith("/.vite/")) {
+          return new Response("Not found", { status: 404 });
+        }
 
-      const asset = await program.serveAsset(request);
+        if (url.pathname === "/stream") {
+          if (bunServer.upgrade(request, { data: { kind: "stream" as const } })) {
+            return;
+          }
 
-      if (asset) {
-        return asset;
-      }
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
 
-      const host = await program.loadHost();
-      const route = await host.resolve?.(request);
-      const template = await program.loadTemplate(request);
+        const asset = await program.serveAsset(request);
 
-      if (route && host.render) {
-        const result = await host.runtime.connect({
-          type: "connect",
-          route: route.route,
-          params: route.params,
-        });
-        const bootstrap = bootstrapFromEnvelopes(result.envelopes);
-        const rendered = await host.render(bootstrap, { request });
+        if (asset) {
+          return asset;
+        }
 
-        return htmlResponse(
-          await program.transformHtml(request, injectInitialRender(template, rendered, bootstrap)),
-        );
-      }
-
-      return htmlResponse(await program.transformHtml(request, template));
-    },
-    websocket: {
-      async message(socket, payload) {
         const host = await program.loadHost();
-        const parsed = parseClientEnvelope<TInput>(String(payload));
+        const route = await host.resolve?.(request);
+        const template = await program.loadTemplate(request);
 
-        if (parsed.type === "error") {
-          socket.send(JSON.stringify(parsed));
-          return;
+        if (route && host.render) {
+          const result = await host.runtime.connect({
+            type: "connect",
+            route: route.route,
+            params: route.params,
+          });
+          const bootstrap = bootstrapFromEnvelopes(result.envelopes);
+          const rendered = await host.render(bootstrap, { request });
+
+          return htmlResponse(
+            await program.transformHtml(
+              request,
+              injectInitialRender(template, rendered, bootstrap),
+            ),
+          );
         }
 
-        const result =
-          parsed.type === "connect"
-            ? await host.runtime.connect(parsed)
-            : await host.runtime.receive(parsed);
+        return htmlResponse(await program.transformHtml(request, template));
+      },
+      websocket: {
+        async message(socket, payload) {
+          const host = await program.loadHost();
+          const parsed = parseClientEnvelope<TInput>(String(payload));
 
-        delivery.send(socket, result.envelopes);
+          if (parsed.type === "error") {
+            socket.send(JSON.stringify(parsed));
+            return;
+          }
+
+          const result =
+            parsed.type === "connect"
+              ? await host.runtime.connect(parsed)
+              : await host.runtime.receive(parsed);
+
+          delivery.send(socket, result.envelopes);
+        },
+        close(socket) {
+          delivery.close(socket);
+        },
       },
-      close(socket) {
-        delivery.close(socket);
-      },
-    },
-  });
+    });
+  } catch (error) {
+    await program.close();
+    throw error;
+  }
+
+  program.printUrls();
 
   return {
     get port() {
@@ -311,6 +322,7 @@ type PreparedProgram<TInput, TProjection, TTrace> = {
   loadTemplate: (request: Request) => Promise<string>;
   transformHtml: (request: Request, html: string) => Promise<string>;
   serveAsset: (request: Request) => Promise<Response | null>;
+  printUrls: () => void;
   close: () => Promise<void>;
 };
 
@@ -352,9 +364,6 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
     },
   });
   await server.listen();
-  if (Bun.env.NODE_ENV !== "test") {
-    server.printUrls();
-  }
 
   const runner = resolved.vite.createServerModuleRunner(server.environments.ssr);
   const origin = localOrigin(server);
@@ -394,6 +403,11 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
       }
 
       return proxyViteAsset(origin, request);
+    },
+    printUrls() {
+      if (Bun.env.NODE_ENV !== "test") {
+        server.printUrls();
+      }
     },
     async close() {
       await runner.close();
@@ -443,6 +457,7 @@ async function prepareProductionProgram<TInput, TProjection, TTrace>(
     async serveAsset(request) {
       return serveViteProductionAsset(clientOutDir, request);
     },
+    printUrls() {},
     async close() {
       return undefined;
     },
