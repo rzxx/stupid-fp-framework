@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createApprovalRuntime } from "../src/demo/approvals/program";
+import { ActiveDeploymentRunsResource } from "../src/demo/approvals/resources";
 import { createApprovalServices } from "../src/demo/approvals/services";
 import type { ApprovalProjection } from "../src/demo/approvals/types";
 import type { ProjectionEnvelope, ProjectionPatchEnvelope } from "../src/framework";
@@ -14,9 +15,9 @@ describe("deployment approval workflow", () => {
     expect(deploymentId).toBeString();
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.approveDeployment", deploymentId },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.approveDeployment", deploymentId },
     });
     const patch = latestPatch(result.envelopes);
     const actionResult = result.envelopes.find((envelope) => envelope.type === "action:result");
@@ -27,6 +28,7 @@ describe("deployment approval workflow", () => {
       ? pendingDeploymentsValue
       : [];
 
+    expect(patch.projectionManifestVersion).toBe(1);
     expect(actionResult).toMatchObject({
       ok: true,
       result: { deploymentId, status: "approved" },
@@ -56,9 +58,9 @@ describe("deployment approval workflow", () => {
     const auditCount = services.audit.forDeployment(deploymentId).length;
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.approveDeployment", deploymentId },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.approveDeployment", deploymentId },
     });
     const actionResult = result.envelopes.find((envelope) => envelope.type === "action:result");
 
@@ -74,9 +76,9 @@ describe("deployment approval workflow", () => {
     const auditCount = services.audit.forDeployment("deploy-search-23").length;
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: {
+      type: "input",
+      viewId: connected.viewId,
+      input: {
         type: "action.approveDeployment",
         deploymentId: "deploy-search-23",
       },
@@ -85,6 +87,73 @@ describe("deployment approval workflow", () => {
 
     expect(actionResult).toMatchObject({ ok: false });
     expect(services.audit.forDeployment("deploy-search-23")).toHaveLength(auditCount);
+  });
+
+  test("live deployment run resource updates through external invalidation", async () => {
+    const services = createApprovalServices();
+    const runtime = createApprovalRuntime({ services });
+    const connected = await connect(runtime);
+
+    services.runs.advance("run-api-rollout", 88);
+    const result = await runtime.invalidate([
+      ActiveDeploymentRunsResource.key({ teamId: "team-platform" }),
+    ]);
+    const patch = latestPatch(result.envelopes);
+    const runsValue = patch.patch.regions.find((region) => region.id === "activeRuns")?.value;
+    const runs = Array.isArray(runsValue) ? runsValue : [];
+
+    expect(connected.projection.activeRuns).toHaveLength(2);
+    expect(
+      runs.some(
+        (run) =>
+          run !== null &&
+          typeof run === "object" &&
+          "id" in run &&
+          run.id === "run-api-rollout" &&
+          "progress" in run &&
+          run.progress === 88,
+      ),
+    ).toBe(true);
+  });
+
+  test("route navigation swaps screens and preserves layout UI state", async () => {
+    const runtime = createApprovalRuntime();
+    const connected = await connect(runtime);
+
+    const toggled = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "ui.trace.toggle" },
+    });
+    const toggledPatch = latestPatch(toggled.envelopes);
+    const tracePanel = toggledPatch.patch.regions.find((region) => region.id === "layout")?.value;
+
+    expect(tracePanel).toMatchObject({ tracePanelOpen: false });
+
+    const navigated = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: {
+        type: "system.navigate",
+        path: "/teams/team-platform/runs",
+        navigation: "push",
+      },
+    });
+    const projection = latestProjection(navigated.envelopes).projection;
+    const trace = navigated.envelopes.find((envelope) => envelope.type === "trace:update")?.trace;
+
+    expect(projection.route).toBe("/teams/:teamId/runs");
+    expect(projection.page).toBe("runs");
+    expect(projection.activeRuns).toHaveLength(2);
+    expect(projection.tracePanelOpen).toBe(false);
+    expect(trace?.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "system",
+          label: "navigation resolved",
+        }),
+      ]),
+    );
   });
 });
 
@@ -101,7 +170,7 @@ async function connect(runtime: ReturnType<typeof createApprovalRuntime>) {
     throw new Error("Expected connected envelope");
   }
 
-  return { sessionId: connected.sessionId, projection: projection.projection };
+  return { viewId: connected.viewId, projection: projection.projection };
 }
 
 function latestProjection(

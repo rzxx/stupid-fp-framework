@@ -1,19 +1,19 @@
-import { createRuntime, defineProgram, type RuntimeStore } from "../../framework";
+import { createRuntime, Program, type RuntimeStore } from "../../framework";
 import { approvalActions } from "./actions";
 import { approvalResources } from "./resources";
-import { approvalScreen } from "./screen";
+import { approvalScreens } from "./screen";
 import {
   createApprovalLayer,
   createApprovalServices,
   type ApprovalEnvironment,
   type ApprovalServices,
 } from "./services";
-import { approvalSession } from "./session";
+import { approvalUIState } from "./ui-state";
 import type {
-  ApprovalActionMessage,
+  ApprovalActionInput,
   ApprovalProjection,
-  ApprovalSessionMessage,
-  ApprovalSessionState,
+  ApprovalUIEvent,
+  ApprovalUIState,
 } from "./types";
 
 export function createApprovalProgram(options?: {
@@ -23,25 +23,19 @@ export function createApprovalProgram(options?: {
   const services =
     options?.services ?? createApprovalServices({ currentUserId: options?.currentUserId });
 
-  return defineProgram<
-    ApprovalEnvironment,
-    ApprovalSessionState,
-    ApprovalSessionMessage,
-    ApprovalActionMessage,
-    ApprovalProjection
-  >({
-    layer: createApprovalLayer(services),
-    resources: approvalResources,
-    session: approvalSession,
-    screen: approvalScreen,
-    actions: approvalActions,
-  });
+  return Program.define("approvals")
+    .layer<ApprovalEnvironment>(createApprovalLayer(services))
+    .resources(...approvalResources)
+    .ui<ApprovalUIState, ApprovalUIEvent>(approvalUIState)
+    .screens<ApprovalProjection>(...approvalScreens)
+    .actions<ApprovalActionInput>(...approvalActions)
+    .build();
 }
 
 export function createApprovalRuntime(options?: {
   services?: ApprovalServices;
   currentUserId?: string;
-  store?: RuntimeStore<ApprovalSessionState, ApprovalProjection>;
+  store?: RuntimeStore<ApprovalUIState, ApprovalProjection>;
 }) {
   return createRuntime(createApprovalProgram(options), { store: options?.store });
 }

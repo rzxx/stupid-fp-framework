@@ -1,11 +1,11 @@
 import { Action, actionFailure, Effect, Schema, type ActionDefinition } from "../../framework";
-import { AuditTrail, Deployment, PendingDeployments } from "./resources";
+import { AuditTrailResource, DeploymentResource, PendingDeploymentsResource } from "./resources";
 import { Audit, Auth, Clock, Deployments, type ApprovalEnvironment } from "./services";
-import type { ApprovalActionMessage } from "./types";
+import type { ApprovalActionInput } from "./types";
 
 export const approveDeploymentAction: ActionDefinition<
   ApprovalEnvironment,
-  ApprovalActionMessage,
+  ApprovalActionInput,
   { deploymentId: string; status: "approved" }
 > = Action.define("action.approveDeployment")
   .input(
@@ -14,10 +14,10 @@ export const approveDeploymentAction: ActionDefinition<
       deploymentId: Schema.String,
     }),
   )
-  .run((message, context) =>
+  .run((input, context) =>
     Effect.gen(function* () {
       context.traces.add(context.trace, "validation", "input validated", {
-        deploymentId: message.deploymentId,
+        deploymentId: input.deploymentId,
       });
 
       const auth = yield* Auth;
@@ -31,12 +31,12 @@ export const approveDeploymentAction: ActionDefinition<
         role: user.role,
       });
 
-      const deployment = yield* Effect.sync(() => deployments.find(message.deploymentId));
+      const deployment = yield* Effect.sync(() => deployments.find(input.deploymentId));
 
       if (!deployment) {
         return yield* Effect.fail(
           actionFailure("Unknown deployment", {
-            deploymentId: message.deploymentId,
+            deploymentId: input.deploymentId,
           }),
         );
       }
@@ -97,9 +97,9 @@ export const approveDeploymentAction: ActionDefinition<
         deploymentId: deployment.id,
       });
 
-      context.invalidate(Deployment(deployment.id));
-      context.invalidate(PendingDeployments(deployment.teamId));
-      context.invalidate(AuditTrail(deployment.id));
+      context.invalidate(DeploymentResource.key({ deploymentId: deployment.id }));
+      context.invalidate(PendingDeploymentsResource.key({ teamId: deployment.teamId }));
+      context.invalidate(AuditTrailResource.key({ deploymentId: deployment.id }));
 
       return { deploymentId: deployment.id, status: "approved" as const };
     }),

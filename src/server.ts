@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { JsonFileRuntimeStore, serveBunProgram, type TraceSnapshot } from "./framework";
 import { createApprovalRuntime } from "./demo/approvals/program";
-import type { ApprovalClientMessage, ApprovalProjection } from "./demo/approvals/types";
+import type { ApprovalClientInput, ApprovalProjection } from "./demo/approvals/types";
 import { renderApprovalApp } from "./demo/approvals/client/render-approval";
 
 const root = import.meta.dir;
@@ -12,21 +12,43 @@ const runtime = createApprovalRuntime({
 });
 const port = Number(Bun.env.PORT ?? 3000);
 
-const server = await serveBunProgram<ApprovalClientMessage, ApprovalProjection, TraceSnapshot>({
+const server = await serveBunProgram<ApprovalClientInput, ApprovalProjection, TraceSnapshot>({
   runtime,
   rootDir: root,
   clientEntry: join(root, "demo", "approvals", "client", "app.tsx"),
   shellPath: join(root, "shell.html"),
-  stylesPath: join(root, "demo", "approvals", "client", "styles.css"),
+  assets: {
+    styles: [
+      {
+        input: join(root, "demo", "approvals", "client", "styles.css"),
+        route: "/styles.css",
+        output: "styles.css",
+      },
+    ],
+  },
   port,
+  dev: {
+    watch: Bun.env.NODE_ENV !== "production",
+  },
   initialRender: {
-    resolve: () => ({
-      route: "/teams/:teamId/deployments",
-      params: { teamId: "team-platform" },
-    }),
+    resolve: (request) => resolveApprovalRoute(request),
     render: renderApprovalApp,
   },
 });
 
 // eslint-disable-next-line no-console
 console.log(`Deployment approvals prototype running at http://localhost:${server.port}`);
+
+function resolveApprovalRoute(request: Request) {
+  const url = new URL(request.url);
+  const path = url.pathname === "/" ? "/teams/team-platform/deployments" : url.pathname;
+
+  if (path === "/teams/team-platform/deployments" || path === "/teams/team-platform/runs") {
+    return {
+      route: path,
+      params: {},
+    };
+  }
+
+  return undefined;
+}

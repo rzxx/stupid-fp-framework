@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { serveBunProgram, type ClientEnvelope, type ServerEnvelope } from "../src/framework";
 
 type TestMessage = { type: "action.touch" };
-type TestProjection = { sessionId: string; value: number };
+type TestProjection = { viewId: string; value: number };
 type TestTrace = { traceId: string; events: unknown[] };
 
 describe("Bun host stream delivery", () => {
-  test("delivers returned envelopes to every connected session they target", async () => {
+  test("delivers returned envelopes to every connected view they target", async () => {
     const root = join(tmpdir(), `stupid-fp-host-${crypto.randomUUID()}`);
     await mkdir(root, { recursive: true });
     const clientEntry = join(root, "client.ts");
@@ -52,28 +52,28 @@ describe("Bun host stream delivery", () => {
       );
 
       expect(await readEnvelope(first, "connected")).toMatchObject({
-        sessionId: "session-first",
+        viewId: "view-first",
       });
       expect(await readEnvelope(second, "connected")).toMatchObject({
-        sessionId: "session-second",
+        viewId: "view-second",
       });
       await readEnvelope(first, "projection:update");
       await readEnvelope(second, "projection:update");
 
       first.send(
         JSON.stringify({
-          type: "message",
-          sessionId: "session-first",
-          message: { type: "action.touch" },
+          type: "input",
+          viewId: "view-first",
+          input: { type: "action.touch" },
         } satisfies ClientEnvelope<TestMessage>),
       );
 
       expect(await readEnvelope(first, "action:result")).toMatchObject({
-        sessionId: "session-first",
+        viewId: "view-first",
         ok: true,
       });
       expect(await readEnvelope(second, "projection:patch")).toMatchObject({
-        sessionId: "session-second",
+        viewId: "view-second",
         patch: {
           kind: "region-values",
           regions: [expect.objectContaining({ id: "shared", value: 1 })],
@@ -107,7 +107,7 @@ describe("Bun host stream delivery", () => {
       initialRender: {
         resolve: () => ({ route: "/test", params: { id: "initial" } }),
         render: (bootstrap) =>
-          `<main data-session="${bootstrap.sessionId}">${bootstrap.projection.value}</main>`,
+          `<main data-view="${bootstrap.viewId}">${bootstrap.projection.value}</main>`,
       },
     });
 
@@ -116,10 +116,84 @@ describe("Bun host stream delivery", () => {
       const html = await response.text();
 
       expect(response.headers.get("content-type")).toContain("text/html");
-      expect(html).toContain('<div id="root"><main data-session="session-initial">0</main></div>');
+      expect(html).toContain('<div id="root"><main data-view="view-initial">0</main></div>');
       expect(html).toContain("window.__STUPID_FP_BOOTSTRAP__=");
-      expect(html).toContain('"sessionId":"session-initial"');
+      expect(html).toContain('"viewId":"view-initial"');
       expect(html).toContain('"projectionVersion":1');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("dev watch mode injects reload client into served HTML", async () => {
+    const root = join(tmpdir(), `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    await writeFile(clientEntry, "console.log('host test');\n");
+    await writeFile(shellPath, '<html><body><div id="root"></div></body></html>');
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir: join(root, "dist"),
+      port: 0,
+      dev: { watch: true },
+    });
+
+    try {
+      const response = await fetch(`http://localhost:${server.port}/`);
+      const html = await response.text();
+
+      expect(html).toContain("/__stupid_fp_reload");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("style asset hooks build and serve Bun-native CSS outputs", async () => {
+    const root = join(tmpdir(), `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    const styleInput = join(root, "styles.input.css");
+    const outdir = join(root, "dist");
+    await writeFile(clientEntry, "console.log('host test');\n");
+    await writeFile(shellPath, '<html><body><div id="root"></div></body></html>');
+    await writeFile(styleInput, ".demo { color: red; }\n");
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir,
+      port: 0,
+      dev: { watch: true },
+      assets: {
+        styles: [
+          {
+            input: styleInput,
+            output: "assets/demo.css",
+            route: "/assets/demo.css",
+            watch: [styleInput],
+            build: async ({ input, output }) => {
+              const source = await readFile(input, "utf8");
+              await writeFile(output, `/* built */\n${source}`);
+            },
+          },
+        ],
+      },
+    });
+
+    try {
+      const css = await fetch(`http://localhost:${server.port}/assets/demo.css`);
+      const status = await fetch(`http://localhost:${server.port}/__stupid_fp_dev_status`);
+
+      expect(await css.text()).toContain("/* built */");
+      expect(await status.json()).toEqual({ ok: true, error: null });
     } finally {
       server.stop(true);
     }
@@ -129,23 +203,23 @@ describe("Bun host stream delivery", () => {
 function createFanoutRuntime() {
   return {
     async connect(envelope: Extract<ClientEnvelope<TestMessage>, { type: "connect" }>) {
-      const sessionId = `session-${envelope.params.id}`;
+      const viewId = `view-${envelope.params.id}`;
 
       return {
         envelopes: [
           {
             type: "connected",
-            sessionId,
-            cursor: `${sessionId}-cursor-1`,
+            viewId,
+            cursor: `${viewId}-cursor-1`,
             resumed: false,
             resume: { status: "fresh" },
           },
           {
             type: "projection:update",
-            sessionId,
-            cursor: `${sessionId}-cursor-2`,
+            viewId,
+            cursor: `${viewId}-cursor-2`,
             projectionVersion: 1,
-            projection: { sessionId, value: 0 },
+            projection: { viewId, value: 0 },
             regions: [],
           },
         ] satisfies ServerEnvelope<TestProjection, TestTrace>[],
@@ -156,7 +230,7 @@ function createFanoutRuntime() {
         envelopes: [
           {
             type: "action:result",
-            sessionId: "session-first",
+            viewId: "view-first",
             cursor: "cursor-action",
             traceId: "trace-1",
             action: "touch",
@@ -164,7 +238,7 @@ function createFanoutRuntime() {
           },
           {
             type: "projection:patch",
-            sessionId: "session-second",
+            viewId: "view-second",
             cursor: "cursor-patch",
             projectionVersion: 2,
             patch: {

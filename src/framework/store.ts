@@ -1,17 +1,23 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { SessionSnapshot } from "./session";
+import type { ViewCheckpoint } from "./view";
 import type { ServerEnvelope } from "./stream";
 import type { TraceSnapshot } from "./trace";
+import type { ProjectionRegionSnapshot } from "./projection";
+import type { SerializedResourceKey } from "./resource";
 
 export const RUNTIME_STORE_PROTOCOL_VERSION = 1;
 
 export type RuntimeStoreCapabilities = {
   ephemeral: boolean;
   singleProcess: boolean;
+  singleWriter: boolean;
   supportsRangeRead: boolean;
   supportsCompaction: boolean;
   supportsPubSub: boolean;
+  supportsObservationIndex: boolean;
+  supportsAtomicCommit: boolean;
+  supportsInputIdempotency: boolean;
   retention: "unbounded" | "adapter-defined";
 };
 
@@ -19,6 +25,7 @@ export type RuntimeStoreErrorReason =
   | "read-failed"
   | "write-failed"
   | "corrupt-store"
+  | "commit-conflict"
   | "unsupported-operation";
 
 export class RuntimeStoreError extends Error {
@@ -43,59 +50,141 @@ export function runtimeStoreError(
 }
 
 export type StoredEnvelope<TProjection, TTrace = TraceSnapshot> = {
-  sessionId: string;
+  viewId: string;
   cursor: string;
   envelope: ServerEnvelope<TProjection, TTrace>;
 };
 
-export type RuntimeStore<TSessionState, TProjection, TTrace = TraceSnapshot> = {
+export type RuntimeEnvelopeWrite<TProjection, TTrace = TraceSnapshot> = {
+  viewId: string;
+  envelope: ServerEnvelope<TProjection, TTrace>;
+};
+
+export type RuntimeViewWrite<TUIState> = {
+  checkpoint: ViewCheckpoint<TUIState>;
+  expectedRevision?: number;
+};
+
+export type RuntimeObservationWrite = {
+  fanoutScope: string;
+  viewId: string;
+  regions: ProjectionRegionSnapshot[];
+};
+
+export type RuntimeInputRecord = {
+  clientInputId: string;
+  viewId: string;
+  status: "accepted" | "committed" | "failed";
+};
+
+export type RuntimeStoreCommit<TUIState, TProjection, TTrace = TraceSnapshot> = {
+  envelopes?: RuntimeEnvelopeWrite<TProjection, TTrace>[];
+  views?: RuntimeViewWrite<TUIState>[];
+  observations?: RuntimeObservationWrite[];
+  inputRecords?: RuntimeInputRecord[];
+};
+
+export type RuntimeStoreCommitResult<TUIState, TProjection, TTrace = TraceSnapshot> = {
+  envelopes: StoredEnvelope<TProjection, TTrace>[];
+  views: ViewCheckpoint<TUIState>[];
+};
+
+export type ObservationIndexMatch = {
+  viewId: string;
+  regions: ProjectionRegionSnapshot[];
+};
+
+export type RuntimeStore<TUIState, TProjection, TTrace = TraceSnapshot> = {
   capabilities: RuntimeStoreCapabilities;
-  saveSession: (snapshot: SessionSnapshot<TSessionState>) => Promise<void>;
-  loadSession: (sessionId: string) => Promise<SessionSnapshot<TSessionState> | null>;
+  commitInvocation: (
+    commit: RuntimeStoreCommit<TUIState, TProjection, TTrace>,
+  ) => Promise<RuntimeStoreCommitResult<TUIState, TProjection, TTrace>>;
+  saveView: (checkpoint: ViewCheckpoint<TUIState>) => Promise<void>;
+  loadView: (viewId: string) => Promise<ViewCheckpoint<TUIState> | null>;
+  listViews: () => Promise<ViewCheckpoint<TUIState>[]>;
   nextCursor: () => Promise<string>;
   appendEnvelope: (
-    sessionId: string,
+    viewId: string,
     cursor: string,
     envelope: ServerEnvelope<TProjection, TTrace>,
   ) => Promise<void>;
   readEnvelopesAfter: (
-    sessionId: string,
+    viewId: string,
     cursor: string,
   ) => Promise<StoredEnvelope<TProjection, TTrace>[]>;
-  hasEnvelopeCursor: (sessionId: string, cursor: string) => Promise<boolean>;
+  hasEnvelopeCursor: (viewId: string, cursor: string) => Promise<boolean>;
+  replaceViewObservations: (write: RuntimeObservationWrite) => Promise<void>;
+  findViewsObserving: (
+    fanoutScope: string,
+    keys: readonly SerializedResourceKey[],
+  ) => Promise<ObservationIndexMatch[]>;
+  findViewsObservingResources: (
+    keys: readonly SerializedResourceKey[],
+  ) => Promise<ObservationIndexMatch[]>;
+  readInputRecord: (clientInputId: string) => Promise<RuntimeInputRecord | null>;
 };
 
-type StoredState<TSessionState, TProjection, TTrace> = {
+type StoredState<TUIState, TProjection, TTrace> = {
   protocolVersion: number;
   nextCursor: number;
-  sessions: SessionSnapshot<TSessionState>[];
+  views: ViewCheckpoint<TUIState>[];
   envelopes: StoredEnvelope<TProjection, TTrace>[];
+  observations: RuntimeObservationWrite[];
+  inputRecords: RuntimeInputRecord[];
 };
 
 export class MemoryRuntimeStore<
-  TSessionState,
+  TUIState,
   TProjection,
   TTrace = TraceSnapshot,
-> implements RuntimeStore<TSessionState, TProjection, TTrace> {
+> implements RuntimeStore<TUIState, TProjection, TTrace> {
   readonly capabilities: RuntimeStoreCapabilities = {
     ephemeral: true,
     singleProcess: true,
+    singleWriter: true,
     supportsRangeRead: true,
     supportsCompaction: false,
     supportsPubSub: false,
+    supportsObservationIndex: true,
+    supportsAtomicCommit: true,
+    supportsInputIdempotency: true,
     retention: "unbounded",
   };
 
-  readonly #sessions = new Map<string, SessionSnapshot<TSessionState>>();
+  readonly #views = new Map<string, ViewCheckpoint<TUIState>>();
   readonly #envelopes: StoredEnvelope<TProjection, TTrace>[] = [];
+  readonly #observations = new Map<string, RuntimeObservationWrite>();
+  readonly #inputRecords = new Map<string, RuntimeInputRecord>();
   #nextCursor = 1;
 
-  async saveSession(snapshot: SessionSnapshot<TSessionState>): Promise<void> {
-    this.#sessions.set(snapshot.sessionId, snapshot);
+  async commitInvocation(
+    commit: RuntimeStoreCommit<TUIState, TProjection, TTrace>,
+  ): Promise<RuntimeStoreCommitResult<TUIState, TProjection, TTrace>> {
+    this.#validateViewWrites(commit.views ?? []);
+    const envelopes = this.#commitEnvelopes(commit.envelopes ?? []);
+    const views = this.#commitViews(commit.views ?? [], envelopes);
+
+    for (const observation of commit.observations ?? []) {
+      this.#replaceViewObservations(observation);
+    }
+
+    for (const record of commit.inputRecords ?? []) {
+      this.#inputRecords.set(record.clientInputId, record);
+    }
+
+    return { envelopes, views };
   }
 
-  async loadSession(sessionId: string): Promise<SessionSnapshot<TSessionState> | null> {
-    return this.#sessions.get(sessionId) ?? null;
+  async saveView(snapshot: ViewCheckpoint<TUIState>): Promise<void> {
+    await this.commitInvocation({ views: [{ checkpoint: snapshot }] });
+  }
+
+  async loadView(viewId: string): Promise<ViewCheckpoint<TUIState> | null> {
+    return this.#views.get(viewId) ?? null;
+  }
+
+  async listViews(): Promise<ViewCheckpoint<TUIState>[]> {
+    return [...this.#views.values()].map((view) => ({ ...view }));
   }
 
   async nextCursor(): Promise<string> {
@@ -104,19 +193,19 @@ export class MemoryRuntimeStore<
   }
 
   async appendEnvelope(
-    sessionId: string,
+    viewId: string,
     cursor: string,
     envelope: ServerEnvelope<TProjection, TTrace>,
   ): Promise<void> {
-    this.#envelopes.push({ sessionId, cursor, envelope });
+    this.#envelopes.push({ viewId, cursor, envelope });
   }
 
   async readEnvelopesAfter(
-    sessionId: string,
+    viewId: string,
     cursor: string,
   ): Promise<StoredEnvelope<TProjection, TTrace>[]> {
     const index = this.#envelopes.findIndex(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
+      (entry) => entry.viewId === viewId && entry.cursor === cursor,
     );
 
     if (index === -1) {
@@ -125,28 +214,115 @@ export class MemoryRuntimeStore<
 
     return this.#envelopes
       .slice(index + 1)
-      .filter((entry) => entry.sessionId === sessionId)
+      .filter((entry) => entry.viewId === viewId)
       .map((entry) => ({ ...entry }));
   }
 
-  async hasEnvelopeCursor(sessionId: string, cursor: string): Promise<boolean> {
-    return this.#envelopes.some(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
-    );
+  async hasEnvelopeCursor(viewId: string, cursor: string): Promise<boolean> {
+    return this.#envelopes.some((entry) => entry.viewId === viewId && entry.cursor === cursor);
+  }
+
+  async replaceViewObservations(write: RuntimeObservationWrite): Promise<void> {
+    this.#replaceViewObservations(write);
+  }
+
+  async findViewsObserving(
+    fanoutScope: string,
+    keys: readonly SerializedResourceKey[],
+  ): Promise<ObservationIndexMatch[]> {
+    return findObservationMatches([...this.#observations.values()], fanoutScope, keys);
+  }
+
+  async findViewsObservingResources(
+    keys: readonly SerializedResourceKey[],
+  ): Promise<ObservationIndexMatch[]> {
+    return findObservationMatches([...this.#observations.values()], undefined, keys);
+  }
+
+  async readInputRecord(clientInputId: string): Promise<RuntimeInputRecord | null> {
+    return this.#inputRecords.get(clientInputId) ?? null;
+  }
+
+  #commitEnvelopes(
+    writes: RuntimeEnvelopeWrite<TProjection, TTrace>[],
+  ): StoredEnvelope<TProjection, TTrace>[] {
+    return writes.map((write) => {
+      const cursor = `cursor-${this.#nextCursor++}`;
+      const envelope = withCursor(write.envelope, cursor);
+      const stored = { viewId: write.viewId, cursor, envelope };
+
+      this.#envelopes.push(stored);
+      return stored;
+    });
+  }
+
+  #commitViews(
+    writes: RuntimeViewWrite<TUIState>[],
+    envelopes: StoredEnvelope<TProjection, TTrace>[],
+  ): ViewCheckpoint<TUIState>[] {
+    const committed: ViewCheckpoint<TUIState>[] = [];
+
+    for (const write of writes) {
+      const current = this.#views.get(write.checkpoint.viewId);
+      const currentRevision = current?.checkpointRevision ?? 0;
+
+      const cursor =
+        [...envelopes].reverse().find((entry) => entry.viewId === write.checkpoint.viewId)
+          ?.cursor ??
+        write.checkpoint.cursor ??
+        null;
+      const checkpoint = {
+        ...write.checkpoint,
+        fanoutScope: write.checkpoint.fanoutScope ?? "global",
+        checkpointRevision: currentRevision + 1,
+        cursor,
+      };
+
+      this.#views.set(checkpoint.viewId, checkpoint);
+      committed.push(checkpoint);
+    }
+
+    return committed;
+  }
+
+  #replaceViewObservations(write: RuntimeObservationWrite): void {
+    this.#observations.set(write.viewId, {
+      fanoutScope: write.fanoutScope,
+      viewId: write.viewId,
+      regions: write.regions,
+    });
+  }
+
+  #validateViewWrites(writes: RuntimeViewWrite<TUIState>[]): void {
+    for (const write of writes) {
+      const current = this.#views.get(write.checkpoint.viewId);
+      const currentRevision = current?.checkpointRevision ?? 0;
+
+      if (write.expectedRevision !== undefined && write.expectedRevision !== currentRevision) {
+        throw runtimeStoreError(
+          "commit-conflict",
+          `Checkpoint ${write.checkpoint.viewId} expected revision ${write.expectedRevision} but found ${currentRevision}`,
+        );
+      }
+    }
   }
 }
 
 export class JsonFileRuntimeStore<
-  TSessionState,
+  TUIState,
   TProjection,
   TTrace = TraceSnapshot,
-> implements RuntimeStore<TSessionState, TProjection, TTrace> {
+> implements RuntimeStore<TUIState, TProjection, TTrace> {
   readonly capabilities: RuntimeStoreCapabilities = {
     ephemeral: false,
     singleProcess: true,
+    singleWriter: true,
     supportsRangeRead: true,
     supportsCompaction: false,
     supportsPubSub: false,
+    supportsObservationIndex: true,
+    supportsAtomicCommit: true,
+    supportsInputIdempotency: true,
     retention: "adapter-defined",
   };
 
@@ -156,16 +332,43 @@ export class JsonFileRuntimeStore<
     this.#path = path;
   }
 
-  async saveSession(snapshot: SessionSnapshot<TSessionState>): Promise<void> {
+  async commitInvocation(
+    commit: RuntimeStoreCommit<TUIState, TProjection, TTrace>,
+  ): Promise<RuntimeStoreCommitResult<TUIState, TProjection, TTrace>> {
     const state = await this.#read();
-    state.sessions = state.sessions.filter((session) => session.sessionId !== snapshot.sessionId);
-    state.sessions.push(snapshot);
+    const envelopes = commitEnvelopes(state, commit.envelopes ?? []);
+    const views = commitViews(state, commit.views ?? [], envelopes);
+
+    for (const observation of commit.observations ?? []) {
+      state.observations = state.observations.filter(
+        (entry) => entry.viewId !== observation.viewId,
+      );
+      state.observations.push(observation);
+    }
+
+    for (const record of commit.inputRecords ?? []) {
+      state.inputRecords = state.inputRecords.filter(
+        (entry) => entry.clientInputId !== record.clientInputId,
+      );
+      state.inputRecords.push(record);
+    }
+
     await this.#write(state);
+    return { envelopes, views };
   }
 
-  async loadSession(sessionId: string): Promise<SessionSnapshot<TSessionState> | null> {
+  async saveView(snapshot: ViewCheckpoint<TUIState>): Promise<void> {
+    await this.commitInvocation({ views: [{ checkpoint: snapshot }] });
+  }
+
+  async loadView(viewId: string): Promise<ViewCheckpoint<TUIState> | null> {
     const state = await this.#read();
-    return state.sessions.find((session) => session.sessionId === sessionId) ?? null;
+    return state.views.find((view) => view.viewId === viewId) ?? null;
+  }
+
+  async listViews(): Promise<ViewCheckpoint<TUIState>[]> {
+    const state = await this.#read();
+    return state.views;
   }
 
   async nextCursor(): Promise<string> {
@@ -176,57 +379,86 @@ export class JsonFileRuntimeStore<
   }
 
   async appendEnvelope(
-    sessionId: string,
+    viewId: string,
     cursor: string,
     envelope: ServerEnvelope<TProjection, TTrace>,
   ): Promise<void> {
     const state = await this.#read();
-    state.envelopes.push({ sessionId, cursor, envelope });
+    state.envelopes.push({ viewId, cursor, envelope });
     await this.#write(state);
   }
 
   async readEnvelopesAfter(
-    sessionId: string,
+    viewId: string,
     cursor: string,
   ): Promise<StoredEnvelope<TProjection, TTrace>[]> {
     const state = await this.#read();
     const index = state.envelopes.findIndex(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
+      (entry) => entry.viewId === viewId && entry.cursor === cursor,
     );
 
     if (index === -1) {
       return [];
     }
 
-    return state.envelopes.slice(index + 1).filter((entry) => entry.sessionId === sessionId);
+    return state.envelopes.slice(index + 1).filter((entry) => entry.viewId === viewId);
   }
 
-  async hasEnvelopeCursor(sessionId: string, cursor: string): Promise<boolean> {
+  async hasEnvelopeCursor(viewId: string, cursor: string): Promise<boolean> {
     const state = await this.#read();
-    return state.envelopes.some(
-      (entry) => entry.sessionId === sessionId && entry.cursor === cursor,
-    );
+    return state.envelopes.some((entry) => entry.viewId === viewId && entry.cursor === cursor);
   }
 
-  async #read(): Promise<StoredState<TSessionState, TProjection, TTrace>> {
+  async replaceViewObservations(write: RuntimeObservationWrite): Promise<void> {
+    const state = await this.#read();
+    state.observations = state.observations.filter((entry) => entry.viewId !== write.viewId);
+    state.observations.push(write);
+    await this.#write(state);
+  }
+
+  async findViewsObserving(
+    fanoutScope: string,
+    keys: readonly SerializedResourceKey[],
+  ): Promise<ObservationIndexMatch[]> {
+    const state = await this.#read();
+    return findObservationMatches(state.observations, fanoutScope, keys);
+  }
+
+  async findViewsObservingResources(
+    keys: readonly SerializedResourceKey[],
+  ): Promise<ObservationIndexMatch[]> {
+    const state = await this.#read();
+    return findObservationMatches(state.observations, undefined, keys);
+  }
+
+  async readInputRecord(clientInputId: string): Promise<RuntimeInputRecord | null> {
+    const state = await this.#read();
+    return state.inputRecords.find((entry) => entry.clientInputId === clientInputId) ?? null;
+  }
+
+  async #read(): Promise<StoredState<TUIState, TProjection, TTrace>> {
     try {
       const content = await readFile(this.#path, "utf8");
-      const parsed = JSON.parse(content) as Partial<
-        StoredState<TSessionState, TProjection, TTrace>
-      >;
+      const parsed = JSON.parse(content) as Partial<StoredState<TUIState, TProjection, TTrace>>;
 
       if (!isStoredState(parsed)) {
         throw runtimeStoreError("corrupt-store", `Runtime store ${this.#path} has invalid shape`);
       }
 
-      return parsed as StoredState<TSessionState, TProjection, TTrace>;
+      return {
+        ...(parsed as StoredState<TUIState, TProjection, TTrace>),
+        observations: parsed.observations ?? [],
+        inputRecords: parsed.inputRecords ?? [],
+      };
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return {
           protocolVersion: RUNTIME_STORE_PROTOCOL_VERSION,
           nextCursor: 1,
-          sessions: [],
+          views: [],
           envelopes: [],
+          observations: [],
+          inputRecords: [],
         };
       }
 
@@ -242,11 +474,20 @@ export class JsonFileRuntimeStore<
     }
   }
 
-  async #write(state: StoredState<TSessionState, TProjection, TTrace>): Promise<void> {
+  async #write(state: StoredState<TUIState, TProjection, TTrace>): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
     await writeFile(
       this.#path,
-      JSON.stringify({ ...state, protocolVersion: RUNTIME_STORE_PROTOCOL_VERSION }, null, 2),
+      JSON.stringify(
+        {
+          ...state,
+          protocolVersion: RUNTIME_STORE_PROTOCOL_VERSION,
+          observations: state.observations ?? [],
+          inputRecords: state.inputRecords ?? [],
+        },
+        null,
+        2,
+      ),
     );
   }
 }
@@ -255,7 +496,94 @@ function isStoredState(value: Partial<StoredState<unknown, unknown, unknown>>): 
   return (
     value.protocolVersion === RUNTIME_STORE_PROTOCOL_VERSION &&
     typeof value.nextCursor === "number" &&
-    Array.isArray(value.sessions) &&
+    Array.isArray(value.views) &&
     Array.isArray(value.envelopes)
   );
+}
+
+function commitEnvelopes<TProjection, TTrace>(
+  state: StoredState<unknown, TProjection, TTrace>,
+  writes: RuntimeEnvelopeWrite<TProjection, TTrace>[],
+): StoredEnvelope<TProjection, TTrace>[] {
+  return writes.map((write) => {
+    const cursor = `cursor-${state.nextCursor++}`;
+    const envelope = withCursor(write.envelope, cursor);
+    const stored = { viewId: write.viewId, cursor, envelope };
+
+    state.envelopes.push(stored);
+    return stored;
+  });
+}
+
+function commitViews<TUIState, TProjection, TTrace>(
+  state: StoredState<TUIState, TProjection, TTrace>,
+  writes: RuntimeViewWrite<TUIState>[],
+  envelopes: StoredEnvelope<TProjection, TTrace>[],
+): ViewCheckpoint<TUIState>[] {
+  const committed: ViewCheckpoint<TUIState>[] = [];
+
+  for (const write of writes) {
+    const current = state.views.find((view) => view.viewId === write.checkpoint.viewId);
+    const currentRevision = current?.checkpointRevision ?? 0;
+
+    if (write.expectedRevision !== undefined && write.expectedRevision !== currentRevision) {
+      throw runtimeStoreError(
+        "commit-conflict",
+        `Checkpoint ${write.checkpoint.viewId} expected revision ${write.expectedRevision} but found ${currentRevision}`,
+      );
+    }
+
+    const cursor =
+      [...envelopes].reverse().find((entry) => entry.viewId === write.checkpoint.viewId)?.cursor ??
+      write.checkpoint.cursor ??
+      null;
+    const checkpoint = {
+      ...write.checkpoint,
+      fanoutScope: write.checkpoint.fanoutScope ?? "global",
+      checkpointRevision: currentRevision + 1,
+      cursor,
+    };
+
+    state.views = state.views.filter((view) => view.viewId !== checkpoint.viewId);
+    state.views.push(checkpoint);
+    committed.push(checkpoint);
+  }
+
+  return committed;
+}
+
+function withCursor<TProjection, TTrace>(
+  envelope: ServerEnvelope<TProjection, TTrace>,
+  cursor: string,
+): ServerEnvelope<TProjection, TTrace> {
+  if ("cursor" in envelope) {
+    return { ...envelope, cursor };
+  }
+
+  return envelope;
+}
+
+function findObservationMatches(
+  observations: RuntimeObservationWrite[],
+  fanoutScope: string | undefined,
+  keys: readonly SerializedResourceKey[],
+): ObservationIndexMatch[] {
+  const invalidated = new Set(keys.map((key) => `${key.type}:${key.id}`));
+  const matches: ObservationIndexMatch[] = [];
+
+  for (const observation of observations) {
+    if (fanoutScope !== undefined && observation.fanoutScope !== fanoutScope) {
+      continue;
+    }
+
+    const regions = observation.regions.filter((region) =>
+      region.resources.some((resource) => invalidated.has(`${resource.type}:${resource.id}`)),
+    );
+
+    if (regions.length > 0) {
+      matches.push({ viewId: observation.viewId, regions });
+    }
+  }
+
+  return matches;
 }

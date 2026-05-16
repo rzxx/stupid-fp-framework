@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { applyRegionValuePatch } from "../src/adapters/react/projection-patch";
+import {
+  applyRegionValuePatch,
+  createProjectionPatchApplier,
+  type ProjectionPatchManifest,
+} from "../src/adapters/react/projection-patch";
 import type { ProjectionPatchEnvelope } from "../src/framework";
 
 describe("client projection patches", () => {
@@ -11,7 +15,7 @@ describe("client projection patches", () => {
     };
     const patch: ProjectionPatchEnvelope = {
       type: "projection:patch",
-      sessionId: "session-1",
+      viewId: "view-1",
       cursor: "cursor-2",
       projectionVersion: 2,
       patch: {
@@ -41,7 +45,7 @@ describe("client projection patches", () => {
   test("rejects patches without a registered region handler", () => {
     const patch: ProjectionPatchEnvelope = {
       type: "projection:patch",
-      sessionId: "session-1",
+      viewId: "view-1",
       cursor: "cursor-2",
       projectionVersion: 2,
       patch: {
@@ -52,6 +56,82 @@ describe("client projection patches", () => {
 
     expect(() => applyRegionValuePatch({ count: 1 }, patch, {})).toThrow(
       "No projection patch handler registered for region: missing",
+    );
+  });
+
+  test("applies region value patches from a projection manifest", () => {
+    type Projection = {
+      count: number;
+      tracePanelOpen: boolean;
+      traces: { traceId: string }[];
+    };
+    const manifest: ProjectionPatchManifest<Projection> = {
+      projectionVersion: 1,
+      regions: {
+        counter: {
+          kind: "replace-at-path",
+          path: ["count"],
+        },
+        tracePanel: {
+          kind: "replace-fields",
+          fields: [
+            { from: ["open"], to: ["tracePanelOpen"] },
+            { from: ["traces"], to: ["traces"] },
+          ],
+        },
+      },
+    };
+    const applyPatch = createProjectionPatchApplier(manifest);
+    const patch: ProjectionPatchEnvelope = {
+      type: "projection:patch",
+      viewId: "view-1",
+      cursor: "cursor-2",
+      projectionVersion: 2,
+      patch: {
+        kind: "region-values",
+        regions: [
+          { id: "counter", value: 2, resources: [] },
+          {
+            id: "tracePanel",
+            value: { open: true, traces: [{ traceId: "trace-1" }] },
+            resources: [],
+          },
+        ],
+      },
+    };
+
+    expect(applyPatch({ count: 1, tracePanelOpen: false, traces: [] }, patch)).toEqual({
+      count: 2,
+      tracePanelOpen: true,
+      traces: [{ traceId: "trace-1" }],
+    });
+  });
+
+  test("rejects projection patches from incompatible manifest versions", () => {
+    type Projection = { count: number };
+    const applyPatch = createProjectionPatchApplier<Projection>({
+      projectionVersion: 2,
+      regions: {
+        counter: {
+          kind: "replace-at-path",
+          path: ["count"],
+        },
+      },
+    });
+    const patch: ProjectionPatchEnvelope = {
+      type: "projection:patch",
+      viewId: "view-1",
+      cursor: "cursor-2",
+      projectionVersion: 2,
+      projectionManifestVersion: 1,
+      patch: {
+        kind: "region-values",
+        regions: [{ id: "counter", value: 2, resources: [] }],
+      },
+    };
+
+    expect(() => applyPatch({ count: 1 }, patch)).toThrow(
+      "Projection patch manifest version mismatch: received 1, expected 2",
     );
   });
 });

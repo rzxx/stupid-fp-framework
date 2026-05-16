@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   ActionResultEnvelope,
+  ActionLifecycleEnvelope,
   ErrorEnvelope,
   ProgramStreamBootstrap,
   ProjectionPatchEnvelope,
@@ -19,13 +20,23 @@ export type ProgramStreamReactOptions<TProjection, TTrace> = {
   bootstrap?: ProgramStreamBootstrap<TProjection, TTrace>;
   projectionTraces?: (projection: TProjection) => TTrace[];
   applyPatch?: (projection: TProjection, envelope: ProjectionPatchEnvelope) => TProjection;
+  router?: {
+    mode: "history" | "hash";
+  };
 };
 
-export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
+export type OptimisticProjectionUpdate<TProjection> = (projection: TProjection) => TProjection;
+
+export type OptimisticInputOptions<TProjection> = {
+  optimistic?: OptimisticProjectionUpdate<TProjection>;
+  settle?: "projection" | "result";
+};
+
+export type ProgramStreamReactState<TInput, TProjection, TTrace> = {
   connection: {
     status: ConnectionState;
   };
-  session: {
+  view: {
     id: string | null;
     resumed: boolean;
     resume: ResumeResult | null;
@@ -38,7 +49,13 @@ export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
   traces: {
     visible: TTrace[];
   };
+  ui: {
+    send: (input: TInput, options?: OptimisticInputOptions<TProjection>) => void;
+  };
   actions: {
+    run: (input: TInput, options?: OptimisticInputOptions<TProjection>) => void;
+    pendingInputs: Record<string, TInput>;
+    lastLifecycle: ActionLifecycleEnvelope | null;
     lastResult: ActionResultEnvelope | null;
   };
   errors: {
@@ -47,25 +64,39 @@ export type ProgramStreamReactState<TMessage, TProjection, TTrace> = {
   diagnostics: {
     lastPatch: ProjectionPatchEnvelope | null;
   };
-  send: (message: TMessage) => void;
+  send: (input: TInput, options?: OptimisticInputOptions<TProjection>) => void;
+  navigate: (path: string, options?: { replace?: boolean }) => void;
 };
 
-export function useProgramStream<TMessage, TProjection, TTrace extends { traceId: string }>(
+type OptimisticProjectionEntry<TProjection> = {
+  update: OptimisticProjectionUpdate<TProjection>;
+  settle: "projection" | "result";
+};
+
+export function useProgramStream<TInput, TProjection, TTrace extends { traceId: string }>(
   options: ProgramStreamReactOptions<TProjection, TTrace>,
-): ProgramStreamReactState<TMessage, TProjection, TTrace> {
-  const stream = useRef<ProgramStreamClient<TMessage> | null>(null);
+): ProgramStreamReactState<TInput, TProjection, TTrace> {
+  const stream = useRef<ProgramStreamClient<TInput> | null>(null);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [sessionId, setSessionId] = useState<string | null>(options.bootstrap?.sessionId ?? null);
+  const [viewId, setViewId] = useState<string | null>(options.bootstrap?.viewId ?? null);
   const [resumed, setResumed] = useState(options.bootstrap?.resumed ?? false);
   const [resume, setResume] = useState<ResumeResult | null>(options.bootstrap?.resume ?? null);
   const [projection, setProjection] = useState<TProjection | null>(
     options.bootstrap?.projection ?? null,
   );
+  const confirmedProjectionRef = useRef<TProjection | null>(options.bootstrap?.projection ?? null);
+  const optimisticProjectionRef = useRef<Record<string, OptimisticProjectionEntry<TProjection>>>(
+    {},
+  );
+  const optimisticOrderRef = useRef<string[]>([]);
   const [projectionVersion, setProjectionVersion] = useState(
     options.bootstrap?.projectionVersion ?? 0,
   );
   const [cursor, setCursor] = useState<string | null>(options.bootstrap?.cursor ?? null);
   const [traces, setTraces] = useState<TTrace[]>(options.bootstrap?.traces ?? []);
+  const [pendingInputs, setPendingInputs] = useState<Record<string, TInput>>({});
+  const pendingInputsRef = useRef<Record<string, TInput>>({});
+  const [lastLifecycle, setLastLifecycle] = useState<ActionLifecycleEnvelope | null>(null);
   const [lastResult, setLastResult] = useState<ActionResultEnvelope | null>(null);
   const [lastError, setLastError] = useState<ErrorEnvelope | null>(null);
   const [lastPatch, setLastPatch] = useState<ProjectionPatchEnvelope | null>(null);
@@ -79,20 +110,45 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
   } = options;
 
   useEffect(() => {
-    stream.current = connectProgramStream<TMessage, TProjection, TTrace>({
+    pendingInputsRef.current = pendingInputs;
+  }, [pendingInputs]);
+
+  useEffect(() => {
+    stream.current = connectProgramStream<TInput, TProjection, TTrace>({
       route,
       params,
       storageKey,
       bootstrap,
       handlers: {
-        onConnectionState: setConnection,
-        onSession(nextSessionId, nextResumed, nextResume) {
-          setSessionId(nextSessionId);
+        onConnectionState(nextConnection) {
+          setConnection(nextConnection);
+
+          if (nextConnection !== "closed" && nextConnection !== "error") {
+            return;
+          }
+
+          const pendingCount = Object.keys(pendingInputsRef.current).length;
+          clearOptimisticProjection();
+
+          if (pendingCount === 0) {
+            return;
+          }
+
+          pendingInputsRef.current = {};
+          setPendingInputs({});
+          setLastError({
+            type: "error",
+            message: `Stream ${nextConnection} with ${pendingCount} pending input(s); in-flight input recovery is not supported.`,
+          });
+        },
+        onView(nextViewId, nextResumed, nextResume) {
+          setViewId(nextViewId);
           setResumed(nextResumed);
           setResume(nextResume);
         },
         onProjection(envelope) {
-          setProjection(envelope.projection);
+          dropProjectionSettledOptimism();
+          publishProjection(envelope.projection);
           setProjectionVersion(envelope.projectionVersion);
           setCursor(envelope.cursor);
 
@@ -107,51 +163,71 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
           if (!patchProjection) {
             setLastError({
               type: "error",
-              sessionId: envelope.sessionId,
+              viewId: envelope.viewId,
               message: "No projection patch applier configured",
             });
             return;
           }
 
-          setProjection((current) => {
-            if (!current) {
-              setLastError({
-                type: "error",
-                sessionId: envelope.sessionId,
-                message: "Cannot apply projection patch before projection is available",
-              });
-              return current;
-            }
+          const confirmed = confirmedProjectionRef.current;
 
-            let next: TProjection;
+          if (!confirmed) {
+            setLastError({
+              type: "error",
+              viewId: envelope.viewId,
+              message: "Cannot apply projection patch before projection is available",
+            });
+            return;
+          }
 
-            try {
-              next = patchProjection(current, envelope);
-            } catch (error) {
-              setLastError({
-                type: "error",
-                sessionId: envelope.sessionId,
-                message:
-                  error instanceof Error ? error.message : "Failed to apply projection patch",
-              });
-              return current;
-            }
+          let next: TProjection;
 
-            if (projectionTraces) {
-              setTraces((traces) => mergeTraces(traces, projectionTraces(next)));
-            }
+          try {
+            next = patchProjection(confirmed, envelope);
+          } catch (error) {
+            setLastError({
+              type: "error",
+              viewId: envelope.viewId,
+              message: error instanceof Error ? error.message : "Failed to apply projection patch",
+            });
+            return;
+          }
 
-            setProjectionVersion(envelope.projectionVersion);
-            return next;
-          });
+          dropProjectionSettledOptimism();
+          publishProjection(next);
+
+          if (projectionTraces) {
+            setTraces((traces) => mergeTraces(traces, projectionTraces(next)));
+          }
+
+          setProjectionVersion(envelope.projectionVersion);
         },
         onTrace(envelope) {
           setCursor(envelope.cursor);
           setTraces((current) => mergeTrace(current, envelope.trace));
         },
+        onActionLifecycle(envelope) {
+          setCursor(envelope.cursor);
+          setLastLifecycle(envelope);
+        },
         onActionResult(envelope) {
           setCursor(envelope.cursor);
           setLastResult(envelope);
+
+          if (envelope.clientInputId) {
+            if (!envelope.ok) {
+              removeOptimisticProjection(envelope.clientInputId);
+            } else {
+              removeResultSettledOptimism(envelope.clientInputId);
+            }
+
+            setPendingInputs((current) => {
+              const next = { ...current };
+              delete next[envelope.clientInputId as string];
+              pendingInputsRef.current = next;
+              return next;
+            });
+          }
         },
         onError: setLastError,
       },
@@ -160,12 +236,25 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
     return () => stream.current?.close();
   }, [route, params, storageKey, bootstrap, projectionTraces, patchProjection]);
 
+  useEffect(() => {
+    if (!options.router || options.router.mode !== "history") {
+      return;
+    }
+
+    const onPopState = () => {
+      stream.current?.navigate(window.location.pathname, { navigation: "pop" });
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [options.router]);
+
   return {
     connection: {
       status: connection,
     },
-    session: {
-      id: sessionId,
+    view: {
+      id: viewId,
       resumed,
       resume,
       cursor,
@@ -177,7 +266,17 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
     traces: {
       visible: traces,
     },
+    ui: {
+      send(input, sendOptions) {
+        sendProgramInput(input, sendOptions, false);
+      },
+    },
     actions: {
+      run(input, actionOptions) {
+        sendProgramInput(input, actionOptions, true);
+      },
+      pendingInputs,
+      lastLifecycle,
       lastResult,
     },
     errors: {
@@ -186,10 +285,133 @@ export function useProgramStream<TMessage, TProjection, TTrace extends { traceId
     diagnostics: {
       lastPatch,
     },
-    send(message) {
-      stream.current?.send(message);
+    send(input, sendOptions) {
+      sendProgramInput(input, sendOptions, false);
+    },
+    navigate(path, navigateOptions) {
+      if (options.router?.mode === "history") {
+        const method = navigateOptions?.replace ? "replaceState" : "pushState";
+        window.history[method](null, "", path);
+      } else if (options.router?.mode === "hash") {
+        window.location.hash = path;
+      }
+
+      stream.current?.navigate(path, {
+        navigation:
+          options.router?.mode === "hash" ? "hash" : navigateOptions?.replace ? "replace" : "push",
+      });
     },
   };
+
+  function sendProgramInput(
+    input: TInput,
+    inputOptions: OptimisticInputOptions<TProjection> | undefined,
+    trackPending: boolean,
+  ): void {
+    const clientInputId = stream.current?.send(input);
+
+    if (!clientInputId) {
+      return;
+    }
+
+    if (inputOptions?.optimistic) {
+      addOptimisticProjection(clientInputId, {
+        update: inputOptions.optimistic,
+        settle: inputOptions.settle ?? (trackPending ? "result" : "projection"),
+      });
+    }
+
+    if (trackPending) {
+      setPendingInputs((current) => {
+        const next = { ...current, [clientInputId]: input };
+        pendingInputsRef.current = next;
+        return next;
+      });
+    }
+  }
+
+  function addOptimisticProjection(
+    clientInputId: string,
+    entry: OptimisticProjectionEntry<TProjection>,
+  ): void {
+    optimisticProjectionRef.current = {
+      ...optimisticProjectionRef.current,
+      [clientInputId]: entry,
+    };
+    optimisticOrderRef.current = [...optimisticOrderRef.current, clientInputId];
+    republishOptimisticProjection();
+  }
+
+  function removeOptimisticProjection(clientInputId: string): void {
+    if (!optimisticProjectionRef.current[clientInputId]) {
+      return;
+    }
+
+    const next = { ...optimisticProjectionRef.current };
+    delete next[clientInputId];
+    optimisticProjectionRef.current = next;
+    optimisticOrderRef.current = optimisticOrderRef.current.filter((id) => id !== clientInputId);
+    republishOptimisticProjection();
+  }
+
+  function removeResultSettledOptimism(clientInputId: string): void {
+    if (optimisticProjectionRef.current[clientInputId]?.settle !== "result") {
+      return;
+    }
+
+    removeOptimisticProjection(clientInputId);
+  }
+
+  function dropProjectionSettledOptimism(): void {
+    const next = { ...optimisticProjectionRef.current };
+    let changed = false;
+
+    for (const [clientInputId, entry] of Object.entries(next)) {
+      if (entry.settle === "projection") {
+        delete next[clientInputId];
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    optimisticProjectionRef.current = next;
+    optimisticOrderRef.current = optimisticOrderRef.current.filter((id) => next[id]);
+  }
+
+  function clearOptimisticProjection(): void {
+    if (optimisticOrderRef.current.length === 0) {
+      return;
+    }
+
+    optimisticProjectionRef.current = {};
+    optimisticOrderRef.current = [];
+    republishOptimisticProjection();
+  }
+
+  function publishProjection(nextConfirmed: TProjection): void {
+    confirmedProjectionRef.current = nextConfirmed;
+    setProjection(applyOptimisticProjection(nextConfirmed));
+  }
+
+  function republishOptimisticProjection(): void {
+    const confirmed = confirmedProjectionRef.current;
+
+    if (!confirmed) {
+      return;
+    }
+
+    setProjection(applyOptimisticProjection(confirmed));
+  }
+
+  function applyOptimisticProjection(confirmed: TProjection): TProjection {
+    return optimisticOrderRef.current.reduce((current, clientInputId) => {
+      const entry = optimisticProjectionRef.current[clientInputId];
+      return entry ? entry.update(current) : current;
+    }, confirmed);
+  }
 }
 
 function mergeTrace<TTrace extends { traceId: string }>(current: TTrace[], next: TTrace): TTrace[] {

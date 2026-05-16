@@ -1,26 +1,28 @@
 import type { JsonValue } from "./json";
+import type { ProjectionRegionSnapshot } from "./projection";
 
 export type ConnectEnvelope = {
   type: "connect";
   route: string;
   params: Record<string, string>;
   resume?: {
-    sessionId: string;
+    viewId: string;
     cursor: string;
   };
 };
 
-export type ClientMessageEnvelope<TMessage> = {
-  type: "message";
-  sessionId: string;
-  message: TMessage;
+export type ClientInputEnvelope<TInput> = {
+  type: "input";
+  viewId: string;
+  clientInputId?: string;
+  input: TInput;
 };
 
-export type ClientEnvelope<TMessage> = ConnectEnvelope | ClientMessageEnvelope<TMessage>;
+export type ClientEnvelope<TInput> = ConnectEnvelope | ClientInputEnvelope<TInput>;
 
 export type ConnectedEnvelope = {
   type: "connected";
-  sessionId: string;
+  viewId: string;
   cursor: string;
   resumed: boolean;
   resume: ResumeResult;
@@ -32,7 +34,7 @@ export type ResumeResult =
     }
   | {
       status: "rejected";
-      reason: "missing-session" | "route-mismatch";
+      reason: "missing-view" | "route-mismatch";
     }
   | {
       status: "refreshed";
@@ -45,44 +47,34 @@ export type ResumeResult =
 
 export type ProjectionEnvelope<TProjection> = {
   type: "projection:update";
-  sessionId: string;
+  viewId: string;
   cursor: string;
   projectionVersion: number;
+  projectionManifestVersion?: number;
   projection: TProjection;
-  regions: {
-    id: string;
-    value?: JsonValue;
-    resources: {
-      type: string;
-      id: string;
-      label: string;
-    }[];
-  }[];
+  regions: ProjectionRegionSnapshot[];
   causedByTraceId?: string;
 };
 
 export type ProjectionPatchEnvelope = {
   type: "projection:patch";
-  sessionId: string;
+  viewId: string;
   cursor: string;
   projectionVersion: number;
+  projectionManifestVersion?: number;
   patch: {
     kind: "region-values";
     regions: {
       id: string;
       value: JsonValue;
-      resources: {
-        type: string;
-        id: string;
-        label: string;
-      }[];
+      resources: ProjectionRegionSnapshot["resources"];
     }[];
   };
   causedByTraceId?: string;
 };
 
 export type ProgramStreamBootstrap<TProjection, TTrace> = {
-  sessionId: string;
+  viewId: string;
   cursor: string;
   resumed: boolean;
   resume: ResumeResult;
@@ -93,25 +85,36 @@ export type ProgramStreamBootstrap<TProjection, TTrace> = {
 
 export type ActionResultEnvelope = {
   type: "action:result";
-  sessionId: string;
+  viewId: string;
   cursor: string;
   traceId: string;
+  clientInputId?: string;
   action: string;
   ok: boolean;
   error?: string;
   result?: JsonValue;
 };
 
+export type ActionLifecycleEnvelope = {
+  type: "action:lifecycle";
+  viewId: string;
+  cursor: string;
+  traceId: string;
+  clientInputId?: string;
+  action: string;
+  stage: "started" | "committed" | "failed";
+};
+
 export type TraceEnvelope<TTrace> = {
   type: "trace:update";
-  sessionId: string;
+  viewId: string;
   cursor: string;
   trace: TTrace;
 };
 
 export type ErrorEnvelope = {
   type: "error";
-  sessionId?: string;
+  viewId?: string;
   traceId?: string;
   message: string;
 };
@@ -120,15 +123,16 @@ export type ServerEnvelope<TProjection, TTrace> =
   | ConnectedEnvelope
   | ProjectionPatchEnvelope
   | ProjectionEnvelope<TProjection>
+  | ActionLifecycleEnvelope
   | ActionResultEnvelope
   | TraceEnvelope<TTrace>
   | ErrorEnvelope;
 
-export function parseClientEnvelope<TMessage>(
+export function parseClientEnvelope<TInput>(
   payload: string,
-): ClientEnvelope<TMessage> | ErrorEnvelope {
+): ClientEnvelope<TInput> | ErrorEnvelope {
   try {
-    const value = JSON.parse(payload) as Partial<ClientEnvelope<TMessage>>;
+    const value = JSON.parse(payload) as Partial<ClientEnvelope<TInput>>;
 
     if (value.type === "connect") {
       if (typeof value.route !== "string" || !isStringRecord(value.params)) {
@@ -142,12 +146,16 @@ export function parseClientEnvelope<TMessage>(
       return value as ConnectEnvelope;
     }
 
-    if (value.type === "message") {
-      if (typeof value.sessionId !== "string" || !isMessagePayload(value.message)) {
-        return { type: "error", message: "Invalid message envelope" };
+    if (value.type === "input") {
+      if (typeof value.viewId !== "string" || !isInputPayload(value.input)) {
+        return { type: "error", message: "Invalid input envelope" };
       }
 
-      return value as ClientMessageEnvelope<TMessage>;
+      if (value.clientInputId !== undefined && typeof value.clientInputId !== "string") {
+        return { type: "error", message: "Invalid client input id" };
+      }
+
+      return value as ClientInputEnvelope<TInput>;
     }
 
     return { type: "error", message: "Unknown envelope type" };
@@ -156,7 +164,7 @@ export function parseClientEnvelope<TMessage>(
   }
 }
 
-function isMessagePayload(value: unknown): value is { type: string } {
+function isInputPayload(value: unknown): value is { type: string } {
   return (
     value !== null &&
     typeof value === "object" &&
@@ -172,7 +180,7 @@ function isResume(value: unknown): value is ConnectEnvelope["resume"] {
   }
 
   const resume = value as Record<string, unknown>;
-  return typeof resume.sessionId === "string" && typeof resume.cursor === "string";
+  return typeof resume.viewId === "string" && typeof resume.cursor === "string";
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

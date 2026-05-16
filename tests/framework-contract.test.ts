@@ -6,21 +6,27 @@ import {
   actionFailure,
   Action,
   createRuntime,
+  createStatelessRuntime,
   defineProgram,
   defineResource,
   Context,
   Effect,
+  InvocationContext,
   JsonFileRuntimeStore,
   Layer,
   MemoryRuntimeStore,
   parseClientEnvelope,
+  Program,
+  Resource,
   ResourceGraph,
   Route,
+  Screen,
   resourceKey,
   Schema,
-  Session,
+  UIState,
   type ProjectionEnvelope,
   type ProjectionPatchEnvelope,
+  type ProjectionContext,
   type FrameworkPlugin,
   type RuntimeStoreCapabilities,
   RuntimeStoreError,
@@ -29,6 +35,8 @@ import {
   type TraceEnvelope,
   type TraceSnapshot,
   TraceStore,
+  type ViewCheckpoint,
+  type ViewContext,
 } from "../src/framework";
 
 type Services = {
@@ -45,15 +53,15 @@ class CounterService extends Context.Tag("test/CounterService")<
 
 type TestEnvironment = CounterService;
 
-type SessionState = {
+type UIState = {
   selected: boolean;
 };
 
-type SessionMessage = {
-  type: "session.toggle";
+type UIEvent = {
+  type: "view.toggle";
 };
 
-type ActionMessage =
+type ActionInput =
   | {
       type: "action.increment";
       amount: number;
@@ -82,13 +90,13 @@ const failSchema = Schema.Struct({
   type: Schema.Literal("action.fail"),
 });
 const toggleSchema = Schema.Struct({
-  type: Schema.Literal("session.toggle"),
+  type: Schema.Literal("view.toggle"),
 });
-const counterSession = Session.define<SessionState, SessionMessage>({
+const counterUIState = UIState.define<UIState, UIEvent>({
   init: () => ({ selected: false }),
-  messages: [
+  events: [
     {
-      type: "session.toggle",
+      type: "view.toggle",
       schema: toggleSchema,
       update: (state) => ({ selected: !state.selected }),
     },
@@ -124,6 +132,29 @@ describe("framework contract", () => {
     );
   });
 
+  test("runtime results expose protocol events and delivery intents", async () => {
+    const runtime = createCounterRuntime();
+    const result = await runtime.connect({
+      type: "connect",
+      route: "/contract/:id",
+      params: { id: "main" },
+    });
+    const connected = result.envelopes.find((envelope) => envelope.type === "connected");
+
+    if (!connected) {
+      throw new Error("Expected connected envelope");
+    }
+
+    expect(result.protocolEvents?.map((event) => event.type)).toEqual([
+      "view.connected",
+      "projection.updated",
+    ]);
+    expect(result.deliveryIntents?.map((intent) => intent.viewId)).toEqual([
+      connected.viewId,
+      connected.viewId,
+    ]);
+  });
+
   test("programs can route connections to one of multiple registered screens", async () => {
     const runtime = createMultiScreenRuntime();
 
@@ -155,13 +186,63 @@ describe("framework contract", () => {
     expect(projection.params).toEqual({ id: "main" });
   });
 
+  test("named builder APIs compose resources UI state screens and programs", async () => {
+    const BuiltCounter = Resource.define("BuiltCounter")
+      .value<number>()
+      .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
+        id: (params) => params.id,
+      })
+      .load<TestEnvironment>(() => Effect.map(CounterService, (counter) => counter.value));
+    const builtUI = UIState.define("built.ui")
+      .init<UIState>(() => ({ selected: false }))
+      .event<UIEvent>("view.toggle", toggleSchema, (state) => ({
+        selected: !state.selected,
+      }))
+      .build();
+    const builtScreen = Screen.define("built.counter")
+      .route("/built/:id", { params: Schema.Struct({ id: Schema.String }) })
+      .project((view: ViewContext<UIState>, context: ProjectionContext<TestEnvironment>) =>
+        Effect.gen(function* () {
+          const projection: Projection = {
+            route: view.route,
+            params: view.params,
+            selected: view.ui.selected,
+            count: yield* context.region("counter", () =>
+              context.resources.read(BuiltCounter.key({ id: view.params.id as string })),
+            ),
+            traceIds: [],
+          };
+
+          return projection;
+        }),
+      );
+    const runtime = createRuntime(
+      Program.define("built")
+        .layer<TestEnvironment>(createServicesLayer(createServices()))
+        .resources(BuiltCounter)
+        .ui<UIState, UIEvent>(builtUI)
+        .screens<Projection>(builtScreen)
+        .build(),
+    );
+    const result = await runtime.connect({
+      type: "connect",
+      route: "/built/main",
+      params: {},
+    });
+
+    expect(latestProjection(result.envelopes).projection).toMatchObject({
+      route: "/built/:id",
+      count: 0,
+    });
+  });
+
   test("invalidated resources map back to observed projection regions", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
 
     expect(runtime.affectedRegions([counterKey])).toEqual([
       {
-        sessionId: connected.sessionId,
+        viewId: connected.viewId,
         regions: [
           {
             id: "counter",
@@ -228,14 +309,103 @@ describe("framework contract", () => {
     ]);
   });
 
-  test("session messages change ephemeral session state without changing durable resources", async () => {
+  test("principal-scoped resources do not share cached values across principals", async () => {
+    const graph = new ResourceGraph<never>();
+    const key = resourceKey<string>("PrincipalScoped", "main");
+
+    graph.register(
+      defineResource<never, string>(
+        "PrincipalScoped",
+        (scopedKey) => Effect.succeed(scopedKey.scope?.id ?? "missing-scope"),
+        { scope: { kind: "principal" } },
+      ),
+    );
+
+    const first = await Effect.runPromise(
+      Effect.provideService(graph.read(key), InvocationContext, {
+        ...defaultPrincipalInvocation("principal-a"),
+        fanoutScope: "team-platform",
+      }),
+    );
+    const second = await Effect.runPromise(
+      Effect.provideService(graph.read(key), InvocationContext, {
+        ...defaultPrincipalInvocation("principal-b"),
+        fanoutScope: "team-platform",
+      }),
+    );
+    const anonymous = await Effect.runPromise(graph.read(key));
+
+    expect(first).toBe("principal-a");
+    expect(second).toBe("principal-b");
+    expect(anonymous).toBe("anonymous");
+  });
+
+  test("resource declarations support fanout and custom cache scopes", async () => {
+    const graph = new ResourceGraph<never>();
+    const FanoutScoped = Resource.define("FanoutScoped")
+      .value<string>()
+      .scope({ kind: "fanout" })
+      .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
+        id: (params) => params.id,
+      })
+      .load<never>((_params, key) => Effect.succeed(key.scope?.id ?? "missing"));
+    const customKey = resourceKey<string>("CustomScoped", "main", "CustomScoped(main)", {
+      partition: "one",
+    });
+
+    graph.register(FanoutScoped);
+    graph.register(
+      defineResource<never, string>(
+        "CustomScoped",
+        (key) => Effect.succeed(key.scope?.id ?? "missing"),
+        {
+          scope: {
+            kind: "custom",
+            resolve: ({ context, params }) => ({
+              kind: "custom",
+              id: `${(params as { partition: string }).partition}:${context.fanoutScope}`,
+              label: "custom-partition",
+            }),
+          },
+        },
+      ),
+    );
+
+    const fanoutA = await Effect.runPromise(
+      Effect.provideService(
+        graph.read(FanoutScoped.key({ id: "main" })),
+        InvocationContext,
+        defaultPrincipalInvocation("principal-a", "fanout-a"),
+      ),
+    );
+    const fanoutB = await Effect.runPromise(
+      Effect.provideService(
+        graph.read(FanoutScoped.key({ id: "main" })),
+        InvocationContext,
+        defaultPrincipalInvocation("principal-a", "fanout-b"),
+      ),
+    );
+    const custom = await Effect.runPromise(
+      Effect.provideService(
+        graph.read(customKey),
+        InvocationContext,
+        defaultPrincipalInvocation("principal-a", "fanout-a"),
+      ),
+    );
+
+    expect(fanoutA).toBe("fanout-a");
+    expect(fanoutB).toBe("fanout-b");
+    expect(custom).toBe("one:fanout-a");
+  });
+
+  test("UI events change ephemeral view state without changing durable resources", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
 
     const projection = applyCounterPatch(connected.projection, latestPatch(result.envelopes));
@@ -248,20 +418,20 @@ describe("framework contract", () => {
     expect(trace.events.map((event) => event.label)).toContain("region patch streamed");
   });
 
-  test("unknown messages are rejected instead of being treated as session updates", async () => {
+  test("unknown inputs are rejected instead of being treated as view updates", async () => {
     const runtime = createCounterRuntime();
     const connected = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.unknown" } as unknown as SessionMessage,
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.unknown" } as unknown as UIEvent,
     });
 
     expect(result.envelopes[0]).toMatchObject({
       type: "error",
-      sessionId: connected.sessionId,
-      message: "Unknown message type: session.unknown",
+      viewId: connected.viewId,
+      message: "Unknown input type: view.unknown",
     });
     expect(latestTrace(result.envelopes).trace.status).toBe("error");
   });
@@ -272,9 +442,9 @@ describe("framework contract", () => {
     const connected = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.increment", amount: 2 },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.increment", amount: 2 },
     });
 
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
@@ -308,7 +478,7 @@ describe("framework contract", () => {
           phase: "projection",
           label: "regions invalidated",
           detail: {
-            sessionId: connected.sessionId,
+            viewId: connected.viewId,
             regions: ["counter"],
           },
         }),
@@ -321,7 +491,7 @@ describe("framework contract", () => {
           phase: "stream",
           label: "region patch streamed",
           detail: {
-            sessionId: connected.sessionId,
+            viewId: connected.viewId,
             projectionVersion: 2,
             regions: ["counter"],
           },
@@ -330,7 +500,150 @@ describe("framework contract", () => {
     );
   });
 
-  test("plugins can observe actions resources sessions routes and traces", async () => {
+  test("base-key invalidation refreshes every observed principal-scoped variant", async () => {
+    type PrincipalUIState = Record<string, never>;
+    type PrincipalUIEvent = { type: "view.noop" };
+    type PrincipalAction = { type: "action.refreshPrincipals" };
+    type PrincipalProjection = { visible: string };
+
+    const principalKey = resourceKey<string>("PrincipalVisible", "team-platform");
+    const values: Record<string, string> = {
+      "principal-a": "a-before",
+      "principal-b": "b-before",
+    };
+    const uiState = UIState.define<PrincipalUIState, PrincipalUIEvent>({
+      init: () => ({}),
+      events: [],
+    });
+    const runtime = createRuntime(
+      defineProgram<
+        InvocationContext,
+        PrincipalUIState,
+        PrincipalUIEvent,
+        PrincipalAction,
+        PrincipalProjection
+      >({
+        layer: Layer.empty as Layer.Layer<InvocationContext>,
+        resources: [
+          defineResource<InvocationContext, string>(
+            "PrincipalVisible",
+            (key) => Effect.succeed(values[key.scope?.id ?? "anonymous"] ?? "missing"),
+            { scope: { kind: "principal" } },
+          ),
+        ],
+        uiState,
+        screen: {
+          route: "/principal/:principalId",
+          project: (_view, context) =>
+            Effect.map(
+              context.region("visible", () => context.resources.read(principalKey)),
+              (visible) => ({ visible }),
+            ),
+        },
+        actions: [
+          Action.define("action.refreshPrincipals")
+            .input(Schema.Struct({ type: Schema.Literal("action.refreshPrincipals") }))
+            .run<void, InvocationContext>((_input, context) =>
+              Effect.sync(() => {
+                values["principal-a"] = "a-after";
+                values["principal-b"] = "b-after";
+                context.invalidate(principalKey);
+              }),
+            ),
+        ],
+      }),
+      {
+        fanoutScope: () => "team-platform",
+        invocationContext: (input) =>
+          input.type === "connect"
+            ? {
+                principal: {
+                  id: input.params.principalId,
+                },
+              }
+            : {},
+      },
+    );
+    const first = await runtime.connect({
+      type: "connect",
+      route: "/principal/:principalId",
+      params: { principalId: "principal-a" },
+    });
+    const second = await runtime.connect({
+      type: "connect",
+      route: "/principal/:principalId",
+      params: { principalId: "principal-b" },
+    });
+    const firstView = first.envelopes.find((envelope) => envelope.type === "connected")?.viewId;
+    const secondView = second.envelopes.find((envelope) => envelope.type === "connected")?.viewId;
+
+    if (!firstView || !secondView) {
+      throw new Error("Expected connected views");
+    }
+
+    const result = await runtime.receive({
+      type: "input",
+      viewId: firstView,
+      input: { type: "action.refreshPrincipals" },
+    });
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+
+    expect(patches.map((patch) => patch.viewId).sort()).toEqual([firstView, secondView].sort());
+    expect(
+      patches.map((patch) => ({
+        viewId: patch.viewId,
+        scope: patch.patch.regions[0]?.resources[0]?.scope,
+        value: patch.patch.regions[0]?.value,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          viewId: firstView,
+          scope: { kind: "principal", id: "authenticated", label: "principal:authenticated" },
+          value: "a-after",
+        },
+        {
+          viewId: secondView,
+          scope: { kind: "principal", id: "authenticated", label: "principal:authenticated" },
+          value: "b-after",
+        },
+      ]),
+    );
+  });
+
+  test("client input ids flow through action results and input records", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    const runtime = createCounterRuntime(services, store);
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      clientInputId: "client-input-1",
+      input: { type: "action.increment", amount: 1 },
+    });
+    const lifecycle = result.envelopes.find((envelope) => envelope.type === "action:lifecycle");
+    const action = result.envelopes.find((envelope) => envelope.type === "action:result");
+
+    expect(lifecycle).toMatchObject({
+      clientInputId: "client-input-1",
+      stage: "started",
+    });
+    expect(action).toMatchObject({
+      clientInputId: "client-input-1",
+      ok: true,
+    });
+    expect(await store.readInputRecord("client-input-1")).toEqual({
+      clientInputId: "client-input-1",
+      viewId: connected.viewId,
+      status: "committed",
+    });
+  });
+
+  test("plugins can observe actions resources views routes and traces", async () => {
     const observed: string[] = [];
     const plugin: FrameworkPlugin<TestEnvironment> = {
       name: "contract-observer",
@@ -361,14 +674,14 @@ describe("framework contract", () => {
               observed.push(`route:${matchedRoute ?? "none"}`);
             }),
         },
-        session: {
-          create: ({ session }) =>
+        view: {
+          create: ({ view }) =>
             Effect.sync(() => {
-              observed.push(`session:create:${session.sessionId}`);
+              observed.push(`view:create:${view.viewId}`);
             }),
-          update: ({ message }) =>
+          update: ({ input }) =>
             Effect.sync(() => {
-              observed.push(`session:update:${message.type}`);
+              observed.push(`view:update:${input.type}`);
             }),
         },
         trace: {
@@ -383,24 +696,84 @@ describe("framework contract", () => {
     const connected = await connectWithEnvelope(runtime);
 
     await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
     await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.increment", amount: 1 },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.increment", amount: 1 },
     });
 
     expect(observed).toContain("route:/contract/:id");
-    expect(observed).toContain("session:create:session-1");
-    expect(observed).toContain("session:update:session.toggle");
+    expect(observed.some((entry) => entry.startsWith("view:create:"))).toBe(true);
+    expect(observed).toContain("view:update:view.toggle");
     expect(observed).toContain("action:before:action.increment");
     expect(observed).toContain("action:after:action.increment:true");
     expect(observed).toContain("resource:read:Counter(main)");
     expect(observed).toContain("resource:invalidate:Counter(main)");
-    expect(observed).toContain("trace:message received");
+    expect(observed).toContain("trace:input received");
+  });
+
+  test("invocation context is provided through Effect per input", async () => {
+    type AuthInput = { type: "action.whoami" };
+    const runtime = createRuntime(
+      defineProgram<TestEnvironment | InvocationContext, UIState, UIEvent, AuthInput, Projection>({
+        layer: createServicesLayer(createServices()) as Layer.Layer<
+          TestEnvironment | InvocationContext
+        >,
+        resources: [
+          defineResource<TestEnvironment | InvocationContext, number>("Counter", () =>
+            Effect.map(CounterService, (counter) => counter.value),
+          ),
+        ],
+        uiState: counterUIState,
+        screen: {
+          route: counterRoute,
+          project: (view, context) =>
+            Effect.gen(function* () {
+              const invocation = yield* InvocationContext;
+
+              return {
+                route: view.route,
+                params: view.params,
+                selected: view.ui.selected,
+                count: yield* context.region("counter", () => context.resources.read(counterKey)),
+                traceIds: [invocation.fanoutScope],
+              };
+            }),
+        },
+        actions: [
+          Action.define("action.whoami")
+            .input(Schema.Struct({ type: Schema.Literal("action.whoami") }))
+            .run<{ principalId: string }, TestEnvironment | InvocationContext>(() =>
+              Effect.map(InvocationContext, (context) => ({
+                principalId: context.principal?.id ?? "anonymous",
+              })),
+            ),
+        ],
+      }),
+      {
+        fanoutScope: () => "team-context",
+        invocationContext: () => ({
+          principal: { id: "user-context" },
+        }),
+      },
+    );
+    const connected = await connect(runtime as unknown as ReturnType<typeof createCounterRuntime>);
+    const result = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.whoami" },
+    });
+    const action = result.envelopes.find((envelope) => envelope.type === "action:result");
+
+    expect(connected.projection.traceIds).toEqual(["team-context"]);
+    expect(action).toMatchObject({
+      ok: true,
+      result: { principalId: "user-context" },
+    });
   });
 
   test("failed actions report errors and do not mutate durable resources", async () => {
@@ -409,9 +782,9 @@ describe("framework contract", () => {
     const connected = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.fail" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.fail" },
     });
 
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
@@ -431,9 +804,9 @@ describe("framework contract", () => {
     const connected = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.increment", amount: "nope" } as unknown as ActionMessage,
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.increment", amount: "nope" } as unknown as ActionInput,
     });
 
     const action = result.envelopes.find((envelope) => envelope.type === "action:result");
@@ -448,22 +821,22 @@ describe("framework contract", () => {
     expect(trace.status).toBe("error");
   });
 
-  test("projection traces are scoped to the current session", async () => {
+  test("projection traces are scoped to the current view", async () => {
     const runtime = createCounterRuntime();
     const first = await connect(runtime);
     const second = await connect(runtime);
 
     const firstResult = await runtime.receive({
-      type: "message",
-      sessionId: first.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: first.viewId,
+      input: { type: "view.toggle" },
     });
     const firstTraceId = latestTrace(firstResult.envelopes).trace.traceId;
 
     const secondResult = await runtime.receive({
-      type: "message",
-      sessionId: second.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: second.viewId,
+      input: { type: "view.toggle" },
     });
 
     const secondProjection = applyCounterPatch(
@@ -475,23 +848,23 @@ describe("framework contract", () => {
 
   test("trace store keeps dev-only events out of browser snapshots", () => {
     const traces = new TraceStore();
-    const trace = traces.start("contract", { scopeId: "session-1" });
+    const trace = traces.start("contract", { scopeId: "view-1" });
 
-    traces.add(trace, "message", "browser event");
+    traces.add(trace, "input", "browser event");
     traces.add(trace, "auth", "dev credential detail", { token: "secret" }, { visibility: "dev" });
 
-    expect(traces.list("session-1")).toEqual([
+    expect(traces.list("view-1")).toEqual([
       expect.objectContaining({
         events: [expect.objectContaining({ label: "browser event" })],
       }),
     ]);
-    expect(traces.list("session-1", "dev")[0]?.events.map((event) => event.label)).toEqual([
+    expect(traces.list("view-1", "dev")[0]?.events.map((event) => event.label)).toEqual([
       "browser event",
       "dev credential detail",
     ]);
   });
 
-  test("external resource invalidation fans out patches to affected sessions", async () => {
+  test("external resource invalidation fans out patches to affected views", async () => {
     const services = createServices();
     const runtime = createCounterRuntime(services);
     const first = await connect(runtime);
@@ -504,8 +877,8 @@ describe("framework contract", () => {
       (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
     );
 
-    expect(patches.map((patch) => patch.sessionId).sort()).toEqual(
-      [first.sessionId, second.sessionId].sort(),
+    expect(patches.map((patch) => patch.viewId).sort()).toEqual(
+      [first.viewId, second.viewId].sort(),
     );
     expect(patches.map((patch) => applyCounterPatch(first.projection, patch).count)).toEqual([
       7, 7,
@@ -513,25 +886,40 @@ describe("framework contract", () => {
     expect(result.envelopes.some((envelope) => envelope.type === "projection:update")).toBe(false);
   });
 
-  test("action invalidation sends trace envelopes to every affected session", async () => {
+  test("external resource invalidation refreshes non-global fanout observations", async () => {
+    const services = createServices();
+    const runtime = createRuntime(createCounterProgram(services), {
+      fanoutScope: () => "team-platform",
+    });
+    const connected = await connect(runtime);
+
+    services.counter.value = 11;
+    const result = await runtime.invalidate([counterKey]);
+    const patch = latestPatch(result.envelopes);
+
+    expect(patch.viewId).toBe(connected.viewId);
+    expect(applyCounterPatch(connected.projection, patch).count).toBe(11);
+  });
+
+  test("action invalidation sends trace envelopes to every affected view", async () => {
     const services = createServices();
     const runtime = createCounterRuntime(services);
     const first = await connect(runtime);
     const second = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: first.sessionId,
-      message: { type: "action.increment", amount: 1 },
+      type: "input",
+      viewId: first.viewId,
+      input: { type: "action.increment", amount: 1 },
     });
 
     const secondPatch = result.envelopes.find(
       (envelope): envelope is ProjectionPatchEnvelope =>
-        envelope.type === "projection:patch" && envelope.sessionId === second.sessionId,
+        envelope.type === "projection:patch" && envelope.viewId === second.viewId,
     );
     const secondTrace = result.envelopes.find(
       (envelope): envelope is TraceEnvelope<TraceSnapshot> =>
-        envelope.type === "trace:update" && envelope.sessionId === second.sessionId,
+        envelope.type === "trace:update" && envelope.viewId === second.viewId,
     );
 
     expect(secondPatch?.causedByTraceId).toBe(secondTrace?.trace.traceId);
@@ -543,9 +931,9 @@ describe("framework contract", () => {
     const connected = await connect(runtime);
 
     const result = await runtime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "action.increment", amount: 1 },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "action.increment", amount: 1 },
     });
 
     expect(result.envelopes.some((envelope) => envelope.type === "projection:patch")).toBe(false);
@@ -575,21 +963,21 @@ describe("framework contract", () => {
     });
   });
 
-  test("memory store can resume session state with a fresh runtime projection", async () => {
-    const store = new MemoryRuntimeStore<SessionState, Projection>();
-    await assertResumeRestoresSession(store);
+  test("memory store can resume view state with a fresh runtime projection", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    await assertResumeRestoresView(store);
   });
 
-  test("JSON file store can resume session state with a fresh runtime projection", async () => {
-    const store = new JsonFileRuntimeStore<SessionState, Projection>(
+  test("JSON file store can resume view state with a fresh runtime projection", async () => {
+    const store = new JsonFileRuntimeStore<UIState, Projection>(
       join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
     );
-    await assertResumeRestoresSession(store);
+    await assertResumeRestoresView(store);
   });
 
   test("runtime stores expose envelope history after a cursor", async () => {
-    const memory = new MemoryRuntimeStore<SessionState, Projection>();
-    const file = new JsonFileRuntimeStore<SessionState, Projection>(
+    const memory = new MemoryRuntimeStore<UIState, Projection>();
+    const file = new JsonFileRuntimeStore<UIState, Projection>(
       join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
     );
 
@@ -598,52 +986,224 @@ describe("framework contract", () => {
   });
 
   test("runtime stores expose durability capability metadata", () => {
-    const memory = new MemoryRuntimeStore<SessionState, Projection>();
-    const file = new JsonFileRuntimeStore<SessionState, Projection>(
+    const memory = new MemoryRuntimeStore<UIState, Projection>();
+    const file = new JsonFileRuntimeStore<UIState, Projection>(
       join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
     );
 
     expect(memory.capabilities).toMatchObject({
       ephemeral: true,
       singleProcess: true,
+      singleWriter: true,
       supportsRangeRead: true,
+      supportsObservationIndex: true,
+      supportsAtomicCommit: true,
+      supportsInputIdempotency: true,
     } satisfies Partial<RuntimeStoreCapabilities>);
     expect(file.capabilities).toMatchObject({
       ephemeral: false,
       singleProcess: true,
+      singleWriter: true,
       supportsRangeRead: true,
+      supportsObservationIndex: true,
+      supportsAtomicCommit: true,
+      supportsInputIdempotency: true,
     } satisfies Partial<RuntimeStoreCapabilities>);
+  });
+
+  test("runtime store commit assigns cursors checkpoints observations and input records atomically", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const checkpoint = createCheckpoint("view-commit", "scope-a", [counterRegion(1)]);
+
+    const committed = await store.commitInvocation({
+      envelopes: [
+        {
+          viewId: checkpoint.viewId,
+          envelope: {
+            type: "projection:update",
+            viewId: checkpoint.viewId,
+            cursor: "",
+            projectionVersion: 1,
+            projection: projectionFor(1),
+            regions: [counterRegion(1)],
+          },
+        },
+      ],
+      views: [{ checkpoint, expectedRevision: 0 }],
+      observations: [
+        {
+          fanoutScope: "scope-a",
+          viewId: checkpoint.viewId,
+          regions: [counterRegion(1)],
+        },
+      ],
+      inputRecords: [
+        {
+          clientInputId: "input-commit",
+          viewId: checkpoint.viewId,
+          status: "committed",
+        },
+      ],
+    });
+
+    expect(committed.envelopes[0]?.cursor).toBe("cursor-1");
+    expect(committed.views[0]).toMatchObject({
+      viewId: checkpoint.viewId,
+      cursor: "cursor-1",
+      checkpointRevision: 1,
+    });
+    expect(await store.findViewsObserving("scope-a", [counterKey])).toEqual([
+      {
+        viewId: checkpoint.viewId,
+        regions: [counterRegion(1)],
+      },
+    ]);
+    expect(await store.readInputRecord("input-commit")).toEqual({
+      clientInputId: "input-commit",
+      viewId: checkpoint.viewId,
+      status: "committed",
+    });
+  });
+
+  test("memory store commit conflict does not append partial envelopes", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const checkpoint = createCheckpoint("view-conflict", "scope-a", [counterRegion(1)]);
+
+    await store.commitInvocation({
+      envelopes: [
+        {
+          viewId: checkpoint.viewId,
+          envelope: {
+            type: "projection:update",
+            viewId: checkpoint.viewId,
+            cursor: "",
+            projectionVersion: 1,
+            projection: projectionFor(1),
+            regions: [counterRegion(1)],
+          },
+        },
+      ],
+      views: [{ checkpoint, expectedRevision: 0 }],
+    });
+
+    await expect(
+      store.commitInvocation({
+        envelopes: [
+          {
+            viewId: checkpoint.viewId,
+            envelope: {
+              type: "projection:update",
+              viewId: checkpoint.viewId,
+              cursor: "",
+              projectionVersion: 2,
+              projection: projectionFor(2),
+              regions: [counterRegion(2)],
+            },
+          },
+        ],
+        views: [
+          {
+            checkpoint: {
+              ...checkpoint,
+              projectionVersion: 2,
+              observedRegions: [counterRegion(2)],
+            },
+            expectedRevision: 0,
+          },
+        ],
+        observations: [
+          {
+            fanoutScope: "scope-a",
+            viewId: checkpoint.viewId,
+            regions: [counterRegion(2)],
+          },
+        ],
+        inputRecords: [
+          {
+            clientInputId: "input-conflict",
+            viewId: checkpoint.viewId,
+            status: "committed",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ reason: "commit-conflict" });
+
+    expect(await store.readEnvelopesAfter(checkpoint.viewId, "cursor-1")).toEqual([]);
+    expect(await store.findViewsObservingResources([counterKey])).toEqual([]);
+    expect(await store.readInputRecord("input-conflict")).toBeNull();
+  });
+
+  test("observation index does not fan out across scopes", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+
+    await store.replaceViewObservations({
+      fanoutScope: "team-a",
+      viewId: "view-a",
+      regions: [counterRegion(1)],
+    });
+    await store.replaceViewObservations({
+      fanoutScope: "team-b",
+      viewId: "view-b",
+      regions: [counterRegion(1)],
+    });
+
+    expect(await store.findViewsObserving("team-a", [counterKey])).toEqual([
+      {
+        viewId: "view-a",
+        regions: [counterRegion(1)],
+      },
+    ]);
+    expect(await store.findViewsObservingResources([counterKey])).toEqual([
+      {
+        viewId: "view-a",
+        regions: [counterRegion(1)],
+      },
+      {
+        viewId: "view-b",
+        regions: [counterRegion(1)],
+      },
+    ]);
+  });
+
+  test("runtime stores list view checkpoints for stateless observation recovery", async () => {
+    const memory = new MemoryRuntimeStore<UIState, Projection>();
+    const file = new JsonFileRuntimeStore<UIState, Projection>(
+      join(tmpdir(), `stupid-fp-framework-${crypto.randomUUID()}.json`),
+    );
+
+    await assertStoreListsViews(memory);
+    await assertStoreListsViews(file);
   });
 
   test("JSON file store reports corrupted state as a typed store failure", async () => {
     const path = join(tmpdir(), `stupid-fp-framework-corrupt-${crypto.randomUUID()}.json`);
     await writeFile(path, "{ nope", "utf8");
-    const store = new JsonFileRuntimeStore<SessionState, Projection>(path);
+    const store = new JsonFileRuntimeStore<UIState, Projection>(path);
 
-    await expect(store.loadSession("session-1")).rejects.toBeInstanceOf(RuntimeStoreError);
-    await expect(store.loadSession("session-1")).rejects.toMatchObject({
+    await expect(store.loadView("view-1")).rejects.toBeInstanceOf(RuntimeStoreError);
+    await expect(store.loadView("view-1")).rejects.toMatchObject({
       type: "store-error",
       reason: "corrupt-store",
     });
   });
 
   test("resume with missed envelopes replays history instead of recomputing immediately", async () => {
-    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const store = new MemoryRuntimeStore<UIState, Projection>();
     const services = createServices();
     const firstRuntime = createCounterRuntime(services, store);
     const connected = await connect(firstRuntime);
 
     const updated = await firstRuntime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
     const earlierCursor = latestPatch(updated.envelopes).cursor;
 
     await firstRuntime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
 
     const resumedRuntime = createCounterRuntime(services, store);
@@ -652,7 +1212,7 @@ describe("framework contract", () => {
       route: "/contract/:id",
       params: { id: "main" },
       resume: {
-        sessionId: connected.sessionId,
+        viewId: connected.viewId,
         cursor: earlierCursor,
       },
     });
@@ -666,15 +1226,15 @@ describe("framework contract", () => {
   });
 
   test("resume with patch-only missed history includes a projection baseline", async () => {
-    const store = new MemoryRuntimeStore<SessionState, Projection>();
+    const store = new MemoryRuntimeStore<UIState, Projection>();
     const services = createServices();
     const firstRuntime = createCounterRuntime(services, store);
     const connected = await connectWithEnvelope(firstRuntime);
 
     await firstRuntime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
 
     const resumedRuntime = createCounterRuntime(services, store);
@@ -683,7 +1243,7 @@ describe("framework contract", () => {
       route: "/contract/:id",
       params: { id: "main" },
       resume: {
-        sessionId: connected.sessionId,
+        viewId: connected.viewId,
         cursor: connected.projectionEnvelope.cursor,
       },
     });
@@ -697,16 +1257,16 @@ describe("framework contract", () => {
     expect(resumed.envelopes.some((envelope) => envelope.type === "projection:patch")).toBe(true);
   });
 
-  test("resume with route mismatch creates a fresh session with an explicit rejection", async () => {
-    const store = new MemoryRuntimeStore<SessionState, Projection>();
+  test("resume with route mismatch creates a fresh view with an explicit rejection", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
     const services = createServices();
     const firstRuntime = createCounterRuntime(services, store);
     const connected = await connect(firstRuntime);
 
     const updated = await firstRuntime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
     const resumeCursor = latestTrace(updated.envelopes).cursor;
 
@@ -716,7 +1276,7 @@ describe("framework contract", () => {
       route: "/different/:id",
       params: { id: "main" },
       resume: {
-        sessionId: connected.sessionId,
+        viewId: connected.viewId,
         cursor: resumeCursor,
       },
     });
@@ -729,16 +1289,16 @@ describe("framework contract", () => {
     expect(latestProjection(resumed.envelopes).projection.selected).toBe(false);
   });
 
-  test("resume with stale cursor restores session and refreshes projection", async () => {
-    const store = new MemoryRuntimeStore<SessionState, Projection>();
+  test("resume with stale cursor restores view and refreshes projection", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
     const services = createServices();
     const firstRuntime = createCounterRuntime(services, store);
     const connected = await connect(firstRuntime);
 
     await firstRuntime.receive({
-      type: "message",
-      sessionId: connected.sessionId,
-      message: { type: "session.toggle" },
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
     });
 
     const resumedRuntime = createCounterRuntime(services, store);
@@ -747,7 +1307,7 @@ describe("framework contract", () => {
       route: "/contract/:id",
       params: { id: "main" },
       resume: {
-        sessionId: connected.sessionId,
+        viewId: connected.viewId,
         cursor: "cursor-missing",
       },
     });
@@ -758,6 +1318,96 @@ describe("framework contract", () => {
       resume: { status: "refreshed", reason: "stale-cursor" },
     });
     expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
+  });
+
+  test("stateless runtime can process a UI event in a fresh invocation", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    const runtime = createStatelessRuntime(() => createCounterProgram(services), { store });
+    const connected = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "input",
+      viewId: connected.viewId,
+      input: { type: "view.toggle" },
+    });
+
+    const projection = applyCounterPatch(connected.projection, latestPatch(result.envelopes));
+
+    expect(projection.selected).toBe(true);
+    expect(latestTrace(result.envelopes).trace.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "ui",
+          label: "view.toggle applied",
+        }),
+      ]),
+    );
+  });
+
+  test("stateless runtime exposes traces without invoking the program factory", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    let createdPrograms = 0;
+    const runtime = createStatelessRuntime(
+      () => {
+        createdPrograms += 1;
+        return createCounterProgram(services);
+      },
+      { store },
+    );
+
+    expect(runtime.traces.list()).toEqual([]);
+    expect(createdPrograms).toBe(0);
+
+    await connect(runtime);
+
+    expect(createdPrograms).toBe(1);
+  });
+
+  test("stateless action invalidation uses stored observations to fan out patches", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    const runtime = createStatelessRuntime(() => createCounterProgram(services), { store });
+    const first = await connect(runtime);
+    const second = await connect(runtime);
+
+    const result = await runtime.receive({
+      type: "input",
+      viewId: first.viewId,
+      input: { type: "action.increment", amount: 3 },
+    });
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+
+    expect(patches.map((patch) => patch.viewId).sort()).toEqual(
+      [first.viewId, second.viewId].sort(),
+    );
+    expect(patches.map((patch) => applyCounterPatch(first.projection, patch).count)).toEqual([
+      3, 3,
+    ]);
+  });
+
+  test("stateless resource events refresh checkpointed affected views", async () => {
+    const store = new MemoryRuntimeStore<UIState, Projection>();
+    const services = createServices();
+    const runtime = createStatelessRuntime(() => createCounterProgram(services), { store });
+    const first = await connect(runtime);
+    const second = await connect(runtime);
+
+    services.counter.value = 9;
+    const result = await runtime.invalidate([counterKey]);
+    const patches = result.envelopes.filter(
+      (envelope): envelope is ProjectionPatchEnvelope => envelope.type === "projection:patch",
+    );
+
+    expect(patches.map((patch) => patch.viewId).sort()).toEqual(
+      [first.viewId, second.viewId].sort(),
+    );
+    expect(patches.map((patch) => applyCounterPatch(first.projection, patch).count)).toEqual([
+      9, 9,
+    ]);
   });
 
   test("stream parser rejects params that are not string records", () => {
@@ -772,16 +1422,16 @@ describe("framework contract", () => {
     ).toMatchObject({ type: "error", message: "Invalid connect envelope" });
   });
 
-  test("stream parser rejects message payloads without a string type", () => {
+  test("stream parser rejects input payloads without a string type", () => {
     expect(
       parseClientEnvelope(
         JSON.stringify({
-          type: "message",
-          sessionId: "session-1",
-          message: { payload: true },
+          type: "input",
+          viewId: "view-1",
+          input: { payload: true },
         }),
       ),
-    ).toMatchObject({ type: "error", message: "Invalid message envelope" });
+    ).toMatchObject({ type: "error", message: "Invalid input envelope" });
   });
 });
 
@@ -798,18 +1448,29 @@ function createServicesLayer(services: Services): Layer.Layer<TestEnvironment> {
   return Layer.succeed(CounterService, services.counter);
 }
 
+function defaultPrincipalInvocation(principalId: string, fanoutScope = "global") {
+  return {
+    requestId: `request-${principalId}`,
+    fanoutScope,
+    principal: {
+      id: principalId,
+    },
+  };
+}
+
 function createCounterRuntime(
   services = createServices(),
-  store?: RuntimeStore<SessionState, Projection>,
+  store?: RuntimeStore<UIState, Projection>,
   plugins: FrameworkPlugin<TestEnvironment>[] = [],
 ) {
-  const program = defineProgram<
-    TestEnvironment,
-    SessionState,
-    SessionMessage,
-    ActionMessage,
-    Projection
-  >({
+  return createRuntime(createCounterProgram(services, plugins), { store });
+}
+
+function createCounterProgram(
+  services = createServices(),
+  plugins: FrameworkPlugin<TestEnvironment>[] = [],
+) {
+  return defineProgram<TestEnvironment, UIState, UIEvent, ActionInput, Projection>({
     layer: createServicesLayer(services),
     plugins,
     resources: [
@@ -817,17 +1478,15 @@ function createCounterRuntime(
         Effect.map(CounterService, (counter) => counter.value),
       ),
     ],
-    session: counterSession,
+    uiState: counterUIState,
     screen: {
       route: counterRoute,
-      project: (session, context) =>
+      project: (view, context) =>
         Effect.gen(function* () {
           return {
-            route: session.route,
-            params: session.params,
-            selected: yield* context.region("selected", () =>
-              Effect.succeed(session.state.selected),
-            ),
+            route: view.route,
+            params: view.params,
+            selected: yield* context.region("selected", () => Effect.succeed(view.ui.selected)),
             count: yield* context.region("counter", () => context.resources.read(counterKey)),
             traceIds: yield* context.region("traceIds", () =>
               Effect.succeed(context.traces.list().map((trace) => trace.traceId)),
@@ -838,11 +1497,11 @@ function createCounterRuntime(
     actions: [
       Action.define("action.increment")
         .input(incrementSchema)
-        .run<{ count: number }, TestEnvironment>((message, context) =>
+        .run<{ count: number }, TestEnvironment>((input, context) =>
           Effect.gen(function* () {
             const counter = yield* CounterService;
-            counter.value += message.amount;
-            counter.writes.push(`increment:${message.amount}`);
+            counter.value += input.amount;
+            counter.writes.push(`increment:${input.amount}`);
             context.invalidate(counterKey);
             return { count: counter.value };
           }),
@@ -852,32 +1511,24 @@ function createCounterRuntime(
         .run(() => Effect.fail(actionFailure("contract failure"))),
     ],
   });
-
-  return createRuntime(program, { store });
 }
 
 function createUnpatchableRegionRuntime(
   services = createServices(),
-  store?: RuntimeStore<SessionState, Projection>,
+  store?: RuntimeStore<UIState, Projection>,
 ) {
-  const program = defineProgram<
-    TestEnvironment,
-    SessionState,
-    SessionMessage,
-    ActionMessage,
-    Projection
-  >({
+  const program = defineProgram<TestEnvironment, UIState, UIEvent, ActionInput, Projection>({
     layer: createServicesLayer(services),
     resources: [
       defineResource<TestEnvironment, number>("Counter", () =>
         Effect.map(CounterService, (counter) => counter.value),
       ),
     ],
-    session: Session.define<SessionState, SessionMessage>({
+    uiState: UIState.define<UIState, UIEvent>({
       init: () => ({ selected: false }),
-      messages: [
+      events: [
         {
-          type: "session.toggle",
+          type: "view.toggle",
           schema: toggleSchema,
           update: (state) => state,
         },
@@ -885,7 +1536,7 @@ function createUnpatchableRegionRuntime(
     }),
     screen: {
       route: "/contract",
-      project: (session, context) =>
+      project: (view, context) =>
         Effect.gen(function* () {
           const counter = yield* context.region("counter", () =>
             Effect.map(context.resources.read(counterKey), (count) => ({
@@ -895,9 +1546,9 @@ function createUnpatchableRegionRuntime(
           );
 
           return {
-            route: session.route,
-            params: session.params,
-            selected: session.state.selected,
+            route: view.route,
+            params: view.params,
+            selected: view.ui.selected,
             count: counter.count,
             traceIds: [],
           };
@@ -906,10 +1557,10 @@ function createUnpatchableRegionRuntime(
     actions: [
       Action.define("action.increment")
         .input(incrementSchema)
-        .run<{ count: number }, TestEnvironment>((message, context) =>
+        .run<{ count: number }, TestEnvironment>((input, context) =>
           Effect.gen(function* () {
             const counter = yield* CounterService;
-            counter.value += message.amount;
+            counter.value += input.amount;
             context.invalidate(counterKey);
             return { count: counter.value };
           }),
@@ -921,20 +1572,14 @@ function createUnpatchableRegionRuntime(
 }
 
 function createFailingProjectionRuntime() {
-  const program = defineProgram<
-    TestEnvironment,
-    SessionState,
-    SessionMessage,
-    ActionMessage,
-    Projection
-  >({
+  const program = defineProgram<TestEnvironment, UIState, UIEvent, ActionInput, Projection>({
     layer: createServicesLayer(createServices()),
     resources: [],
-    session: Session.define<SessionState, SessionMessage>({
+    uiState: UIState.define<UIState, UIEvent>({
       init: () => ({ selected: false }),
-      messages: [
+      events: [
         {
-          type: "session.toggle",
+          type: "view.toggle",
           schema: toggleSchema,
           update: (state) => state,
         },
@@ -951,24 +1596,18 @@ function createFailingProjectionRuntime() {
 }
 
 function createMultiScreenRuntime() {
-  const program = defineProgram<
-    TestEnvironment,
-    SessionState,
-    SessionMessage,
-    ActionMessage,
-    Projection
-  >({
+  const program = defineProgram<TestEnvironment, UIState, UIEvent, ActionInput, Projection>({
     layer: createServicesLayer(createServices()),
     resources: [
       defineResource<TestEnvironment, number>("Counter", () =>
         Effect.map(CounterService, (counter) => counter.value),
       ),
     ],
-    session: Session.define<SessionState, SessionMessage>({
+    uiState: UIState.define<UIState, UIEvent>({
       init: () => ({ selected: false }),
-      messages: [
+      events: [
         {
-          type: "session.toggle",
+          type: "view.toggle",
           schema: toggleSchema,
           update: (state) => state,
         },
@@ -977,22 +1616,22 @@ function createMultiScreenRuntime() {
     screens: [
       {
         route: "/first",
-        project: (session, context) =>
+        project: (view, context) =>
           Effect.map(context.resources.read(counterKey), (count) => ({
-            route: session.route,
-            params: session.params,
-            selected: session.state.selected,
+            route: view.route,
+            params: view.params,
+            selected: view.ui.selected,
             count,
             traceIds: [],
           })),
       },
       {
         route: "/second",
-        project: (session, context) =>
+        project: (view, context) =>
           Effect.map(context.resources.read(counterKey), (count) => ({
-            route: session.route,
-            params: session.params,
-            selected: session.state.selected,
+            route: view.route,
+            params: view.params,
+            selected: view.ui.selected,
             count,
             traceIds: [],
           })),
@@ -1007,7 +1646,7 @@ function createMultiScreenRuntime() {
 async function connect(runtime: ReturnType<typeof createCounterRuntime>) {
   const connected = await connectWithEnvelope(runtime);
 
-  return { sessionId: connected.sessionId, projection: connected.projectionEnvelope.projection };
+  return { viewId: connected.viewId, projection: connected.projectionEnvelope.projection };
 }
 
 async function connectWithEnvelope(runtime: ReturnType<typeof createCounterRuntime>) {
@@ -1024,7 +1663,7 @@ async function connectWithEnvelope(runtime: ReturnType<typeof createCounterRunti
 
   const projection = latestProjection(result.envelopes);
 
-  return { sessionId: connected.sessionId, projectionEnvelope: projection };
+  return { viewId: connected.viewId, projectionEnvelope: projection };
 }
 
 function latestProjection(
@@ -1069,15 +1708,15 @@ function latestTrace(
   return trace;
 }
 
-async function assertResumeRestoresSession(store: RuntimeStore<SessionState, Projection>) {
+async function assertResumeRestoresView(store: RuntimeStore<UIState, Projection>) {
   const services = createServices();
   const firstRuntime = createCounterRuntime(services, store);
   const connected = await connect(firstRuntime);
 
   const updated = await firstRuntime.receive({
-    type: "message",
-    sessionId: connected.sessionId,
-    message: { type: "session.toggle" },
+    type: "input",
+    viewId: connected.viewId,
+    input: { type: "view.toggle" },
   });
   const resumeCursor = latestTrace(updated.envelopes).cursor;
 
@@ -1087,34 +1726,34 @@ async function assertResumeRestoresSession(store: RuntimeStore<SessionState, Pro
     route: "/contract/:id",
     params: { id: "main" },
     resume: {
-      sessionId: connected.sessionId,
+      viewId: connected.viewId,
       cursor: resumeCursor,
     },
   });
 
   expect(resumed.envelopes[0]).toMatchObject({
     type: "connected",
-    sessionId: connected.sessionId,
+    viewId: connected.viewId,
     resumed: true,
     resume: { status: "refreshed", reason: "current-cursor" },
   });
   expect(latestProjection(resumed.envelopes).projection.selected).toBe(true);
 }
 
-async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Projection>) {
+async function assertStoreEnvelopeHistory(store: RuntimeStore<UIState, Projection>) {
   const firstCursor = await store.nextCursor();
-  await store.appendEnvelope("session-x", firstCursor, {
+  await store.appendEnvelope("view-x", firstCursor, {
     type: "connected",
-    sessionId: "session-x",
+    viewId: "view-x",
     cursor: firstCursor,
     resumed: false,
     resume: { status: "fresh" },
   });
 
   const secondCursor = await store.nextCursor();
-  await store.appendEnvelope("session-x", secondCursor, {
+  await store.appendEnvelope("view-x", secondCursor, {
     type: "projection:update",
-    sessionId: "session-x",
+    viewId: "view-x",
     cursor: secondCursor,
     projectionVersion: 1,
     projection: {
@@ -1127,13 +1766,74 @@ async function assertStoreEnvelopeHistory(store: RuntimeStore<SessionState, Proj
     regions: [],
   });
 
-  expect(await store.readEnvelopesAfter("session-x", firstCursor)).toMatchObject([
+  expect(await store.readEnvelopesAfter("view-x", firstCursor)).toMatchObject([
     {
-      sessionId: "session-x",
+      viewId: "view-x",
       cursor: secondCursor,
       envelope: { type: "projection:update" },
     },
   ]);
+}
+
+async function assertStoreListsViews(store: RuntimeStore<UIState, Projection>) {
+  const checkpoint: ViewCheckpoint<UIState> = {
+    checkpointVersion: 1,
+    viewId: "view-for-store-contract",
+    route: "/contract/:id",
+    params: { id: "main" },
+    fanoutScope: "global",
+    ui: { selected: true },
+    projectionVersion: 1,
+    checkpointRevision: 0,
+    cursor: "cursor-for-store-contract",
+    observedRegions: [],
+  };
+
+  await store.saveView(checkpoint);
+
+  expect(await store.listViews()).toEqual([
+    expect.objectContaining({
+      viewId: checkpoint.viewId,
+      ui: { selected: true },
+    }),
+  ]);
+}
+
+function createCheckpoint(
+  viewId: string,
+  fanoutScope: string,
+  observedRegions = [] as ViewCheckpoint<UIState>["observedRegions"],
+): ViewCheckpoint<UIState> {
+  return {
+    checkpointVersion: 1,
+    viewId,
+    route: "/contract/:id",
+    params: { id: "main" },
+    fanoutScope,
+    ui: { selected: false },
+    projectionVersion: 1,
+    checkpointRevision: 0,
+    cursor: null,
+    observedRegions,
+  };
+}
+
+function counterRegion(value: number): ViewCheckpoint<UIState>["observedRegions"][number] {
+  return {
+    id: "counter",
+    value,
+    resources: [{ type: "Counter", id: "main", label: "Counter(main)" }],
+  };
+}
+
+function projectionFor(count: number): Projection {
+  return {
+    route: "/contract/:id",
+    params: { id: "main" },
+    selected: false,
+    count,
+    traceIds: [],
+  };
 }
 
 function applyCounterPatch(projection: Projection, patch: ProjectionPatchEnvelope): Projection {

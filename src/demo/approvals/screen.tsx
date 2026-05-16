@@ -1,83 +1,164 @@
 import {
   Effect,
-  Route,
+  Layout,
+  Screen,
   Schema,
   type ProjectionContext,
   type ScreenDefinition,
 } from "../../framework";
-import { AuditTrail, Deployment, PendingDeployments } from "./resources";
+import { approvalProjectionPatchManifest } from "./projection-manifest";
+import {
+  ActiveDeploymentRunsResource,
+  AuditTrailResource,
+  DeploymentResource,
+  PendingDeploymentsResource,
+} from "./resources";
 import { Auth, Teams, type ApprovalEnvironment } from "./services";
 import type {
   ApprovalProjection,
-  ApprovalSessionState,
+  ApprovalUIState,
   AuditEntry,
   Deployment as DeploymentRecord,
   DeploymentDetail,
+  DeploymentRun as DeploymentRunRecord,
+  DeploymentRunSummary,
   DeploymentSummary,
 } from "./types";
 
-export const approvalScreen: ScreenDefinition<
+const operationsLayout = Layout.define("approvals.operations");
+const teamRouteParams = Schema.Struct({ teamId: Schema.String });
+
+export const approvalDeploymentsScreen: ScreenDefinition<
   ApprovalEnvironment,
-  ApprovalSessionState,
+  ApprovalUIState,
   ApprovalProjection
-> = {
-  route: Route.define("/teams/:teamId/deployments", {
-    params: Schema.Struct({ teamId: Schema.String }),
-  }),
-  project(session, context) {
+> = Screen.define("approval.deployments")
+  .layout(operationsLayout)
+  .route("/teams/:teamId/deployments", {
+    params: teamRouteParams,
+  })
+  .patchManifest(approvalProjectionPatchManifest)
+  .project((view, context) => {
     return Effect.gen(function* () {
-      const teamId = session.params.teamId;
+      const teamId = view.params.teamId;
+      const layout = yield* approvalLayout(view, context);
+      const pendingDeployments = yield* context.region("pendingDeployments", () =>
+        Effect.map(
+          context.resources.read(PendingDeploymentsResource.key({ teamId })),
+          (deployments) => deployments.map(summary),
+        ),
+      );
+      const activeRuns = yield* activeRunsRegion(teamId, context);
+      const selectedDeployment = view.ui.selectedDeploymentId
+        ? yield* context.region("selectedDeployment", () =>
+            selectedDetail(view.ui.selectedDeploymentId as string, context),
+          )
+        : null;
+
+      const projection: ApprovalProjection = {
+        ...layout,
+        route: "/teams/:teamId/deployments",
+        page: "deployments",
+        pendingDeployments,
+        selectedDeployment,
+        activeRuns,
+      };
+
+      return projection;
+    });
+  });
+
+export const approvalRunsScreen: ScreenDefinition<
+  ApprovalEnvironment,
+  ApprovalUIState,
+  ApprovalProjection
+> = Screen.define("approval.runs")
+  .layout(operationsLayout)
+  .route("/teams/:teamId/runs", {
+    params: teamRouteParams,
+  })
+  .patchManifest(approvalProjectionPatchManifest)
+  .project((view, context) => {
+    return Effect.gen(function* () {
+      const teamId = view.params.teamId;
+      const layout = yield* approvalLayout(view, context);
+      const activeRuns = yield* activeRunsRegion(teamId, context);
+
+      const projection: ApprovalProjection = {
+        ...layout,
+        route: "/teams/:teamId/runs",
+        page: "runs",
+        pendingDeployments: [],
+        selectedDeployment: null,
+        activeRuns,
+      };
+
+      return projection;
+    });
+  });
+
+export const approvalScreens = [approvalDeploymentsScreen, approvalRunsScreen];
+
+function approvalLayout(
+  view: { params: Record<string, string>; ui: ApprovalUIState },
+  context: ProjectionContext<ApprovalEnvironment>,
+) {
+  return context.region("layout", () =>
+    Effect.gen(function* () {
+      const teamId = view.params.teamId;
       const teams = yield* Teams;
       const auth = yield* Auth;
       const team = teams.find(teamId);
       const currentUser = auth.currentUser();
-      const pendingDeployments = yield* context.region("pendingDeployments", () =>
-        Effect.map(context.resources.read(PendingDeployments(teamId)), (deployments) =>
-          deployments.map(summary),
-        ),
-      );
-      const selectedDeployment = session.state.selectedDeploymentId
-        ? yield* context.region("selectedDeployment", () =>
-            selectedDetail(session.state.selectedDeploymentId as string, context),
-          )
-        : null;
-
-      const tracePanel = yield* context.region("tracePanel", () =>
-        Effect.succeed({
-          open: session.state.tracePanelOpen,
-          traces: context.traces.list(),
-        }),
-      );
 
       return {
-        route: "/teams/:teamId/deployments",
         team,
         currentUser: {
           id: currentUser.id,
           name: currentUser.name,
           role: currentUser.role,
         },
-        pendingDeployments,
-        selectedDeployment,
-        tracePanelOpen: tracePanel.open,
-        traces: tracePanel.traces,
+        navigation: {
+          deploymentsPath: `/teams/${teamId}/deployments`,
+          runsPath: `/teams/${teamId}/runs`,
+        },
+        tracePanelOpen: view.ui.tracePanelOpen,
+        traces: context.traces.list(),
       };
-    });
-  },
-};
+    }),
+  );
+}
+
+function activeRunsRegion(teamId: string, context: ProjectionContext<ApprovalEnvironment>) {
+  return context.region("activeRuns", () =>
+    Effect.map(context.resources.read(ActiveDeploymentRunsResource.key({ teamId })), (runs) =>
+      runs.map(runSummary),
+    ),
+  );
+}
 
 function selectedDetail(deploymentId: string, context: ProjectionContext<ApprovalEnvironment>) {
   return Effect.gen(function* () {
-    const deployment = yield* context.resources.read(Deployment(deploymentId));
+    const deployment = yield* context.resources.read(DeploymentResource.key({ deploymentId }));
 
     if (!deployment) {
       return null;
     }
 
-    const auditTrail = yield* context.resources.read(AuditTrail(deploymentId));
+    const auditTrail = yield* context.resources.read(AuditTrailResource.key({ deploymentId }));
 
     return detail(deployment, auditTrail);
   });
+}
+
+function runSummary(run: DeploymentRunRecord): DeploymentRunSummary {
+  return {
+    id: run.id,
+    label: run.label,
+    status: run.status,
+    progress: run.progress,
+    updatedAt: run.updatedAt,
+  };
 }
 
 function summary(deployment: DeploymentRecord): DeploymentSummary {

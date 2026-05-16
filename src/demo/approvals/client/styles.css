@@ -44,6 +44,31 @@ button {
   margin: 4px 0 0;
 }
 
+.primary-nav {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d5dde1;
+  border-radius: 8px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.primary-nav button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #46545c;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 8px 12px;
+}
+
+.primary-nav button[data-active="true"] {
+  background: #1f7662;
+  color: #ffffff;
+}
+
 .eyebrow {
   color: #57646d;
   font-size: 12px;
@@ -94,9 +119,16 @@ button {
 .workspace {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr) minmax(320px, 1fr);
   margin: 0 auto;
   max-width: 1320px;
+}
+
+.deployments-workspace {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr) minmax(320px, 1fr);
+}
+
+.runs-workspace {
+  grid-template-columns: minmax(360px, 1.3fr) minmax(320px, 0.7fr);
 }
 
 .panel {
@@ -236,6 +268,44 @@ button {
   gap: 2px;
 }
 
+.run-list {
+  display: grid;
+  gap: 12px;
+}
+
+.run-row {
+  border: 1px solid #dce3e7;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 120px) 44px;
+  padding: 12px;
+}
+
+.run-row strong,
+.run-row small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-row small {
+  color: #61717a;
+  margin-top: 3px;
+}
+
+.run-row meter {
+  align-self: center;
+  width: 100%;
+}
+
+.run-row > span {
+  align-self: center;
+  color: #46545c;
+  font-size: 13px;
+  text-align: right;
+}
+
 .trace-list {
   display: grid;
   gap: 12px;
@@ -287,6 +357,14 @@ button {
   max-width: 1320px;
 }
 
+.runs-workspace .run-panel {
+  grid-column: auto;
+}
+
+.run-panel.compact {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 980px) {
   .top-bar {
     align-items: start;
@@ -313,6 +391,10 @@ button {
   }
 
   .trace-panel {
+    grid-column: 1 / -1;
+  }
+
+  .run-panel {
     grid-column: 1 / -1;
   }
 }

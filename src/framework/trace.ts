@@ -1,8 +1,8 @@
 import type { JsonRecord } from "./json";
 
 export type TracePhase =
-  | "message"
-  | "session"
+  | "input"
+  | "ui"
   | "action"
   | "validation"
   | "auth"
@@ -10,6 +10,7 @@ export type TracePhase =
   | "effect"
   | "write"
   | "resource"
+  | "system"
   | "projection"
   | "stream"
   | "error";

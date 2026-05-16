@@ -1,9 +1,10 @@
-import type { AuditEntry, Deployment, Team, User } from "./types";
+import type { AuditEntry, Deployment, DeploymentRun, Team, User } from "./types";
 
 export type ApprovalData = {
   teams: Team[];
   users: User[];
   deployments: Deployment[];
+  runs: DeploymentRun[];
   audit: AuditEntry[];
 };
 
@@ -66,6 +67,24 @@ export function createSeedData(): ApprovalData {
         requestedAt: "2026-05-13T08:40:00.000Z",
         approvedBy: "user-approver",
         approvedAt: "2026-05-13T08:45:00.000Z",
+      },
+    ],
+    runs: [
+      {
+        id: "run-api-rollout",
+        teamId: "team-platform",
+        label: "payments-api rollout checks",
+        status: "running",
+        progress: 62,
+        updatedAt: "2026-05-13T09:22:00.000Z",
+      },
+      {
+        id: "run-worker-drain",
+        teamId: "team-platform",
+        label: "settlement-worker queue drain",
+        status: "queued",
+        progress: 18,
+        updatedAt: "2026-05-13T09:19:00.000Z",
       },
     ],
     audit: [

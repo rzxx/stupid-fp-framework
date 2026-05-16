@@ -87,6 +87,8 @@ Pivot questions:
 - What should resource keys look like?
 - Should resources be entity-first, query-first, or both?
 - How much dependency tracking should be automatic?
+- How should cache scope protect tenant-, principal-, and permission-shaped values?
+- Should base-key invalidation refresh all observed scopes before exact-scope invalidation exists?
 
 ### Phase 4: Session Loop Prototype
 
@@ -270,6 +272,7 @@ Early direction:
 ```txt
 React renders and hosts client islands.
 The server program owns workflow, resources, effects, and traces.
+Renderer state is valid only when it is outside the program and safe to lose.
 ```
 
 ### Renderer-Agnostic Kernel vs First Useful App
@@ -311,8 +314,9 @@ These things may become integrations or later conveniences. They are not the cor
 
 ### Resource Graph
 
-- What belongs in durable resources vs ephemeral sessions?
+- What belongs in durable resources, server-observed UIState, and disposable renderer state?
 - Should resources model entities, queries, live feeds, and processes with one abstraction?
+- Which resources are global, fanout-scoped, principal-scoped, or custom-scoped?
 - How explicit should invalidation be?
 - Can dependency tracking stay simple without becoming manual cache management again?
 
@@ -359,7 +363,8 @@ The project direction is coherent if a reader can answer:
 - What does React do?
 - What does the framework kernel own?
 - What state is durable?
-- What state belongs to a session?
+- What state is program-owned, renderer-owned, or protocol state?
+- How does resource cache scope protect permission-shaped values?
 - What does the stream carry?
 - What would the first prototypes prove?
 - Which decisions are intentional and which are still open?

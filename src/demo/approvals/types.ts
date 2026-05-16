@@ -25,6 +25,15 @@ export type Deployment = {
   approvedAt?: string;
 };
 
+export type DeploymentRun = {
+  id: string;
+  teamId: string;
+  label: string;
+  status: "queued" | "running" | "healthy" | "blocked";
+  progress: number;
+  updatedAt: string;
+};
+
 export type AuditEntry = {
   id: string;
   at: string;
@@ -44,32 +53,55 @@ export type DeploymentSummary = {
 };
 
 export type DeploymentDetail = DeploymentSummary & {
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approved" | "rejected" | "approving";
   auditTrail: AuditEntry[];
 };
 
+export type DeploymentRunSummary = {
+  id: string;
+  label: string;
+  status: "queued" | "running" | "healthy" | "blocked";
+  progress: number;
+  updatedAt: string;
+};
+
+export type ApprovalRoute = "/teams/:teamId/deployments" | "/teams/:teamId/runs";
+
 export type ApprovalProjection = {
-  route: "/teams/:teamId/deployments";
+  route: ApprovalRoute;
+  page: "deployments" | "runs";
   team: { id: string; name: string };
   currentUser: { id: string; name: string; role: "approver" | "viewer" };
+  navigation: {
+    deploymentsPath: string;
+    runsPath: string;
+  };
   pendingDeployments: DeploymentSummary[];
   selectedDeployment: DeploymentDetail | null;
+  activeRuns: DeploymentRunSummary[];
   tracePanelOpen: boolean;
   traces: TraceSnapshot[];
 };
 
-export type ApprovalSessionState = {
+export type ApprovalUIState = {
   selectedDeploymentId: string | null;
   tracePanelOpen: boolean;
 };
 
-export type ApprovalSessionMessage =
-  | { type: "session.selectDeployment"; deploymentId: string }
-  | { type: "session.toggleTracePanel" };
+export type ApprovalUIEvent =
+  | { type: "ui.deployment.select"; deploymentId: string }
+  | { type: "ui.trace.toggle" };
 
-export type ApprovalActionMessage = {
+export type ApprovalActionInput = {
   type: "action.approveDeployment";
   deploymentId: string;
 };
 
-export type ApprovalClientMessage = ApprovalSessionMessage | ApprovalActionMessage;
+export type ApprovalSystemInput = {
+  type: "system.navigate";
+  path: string;
+  params?: Record<string, string>;
+  navigation?: "push" | "replace" | "pop" | "hash";
+};
+
+export type ApprovalClientInput = ApprovalUIEvent | ApprovalActionInput | ApprovalSystemInput;
