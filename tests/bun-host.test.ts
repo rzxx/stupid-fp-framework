@@ -198,6 +198,45 @@ describe("Bun host stream delivery", () => {
       server.stop(true);
     }
   });
+
+  test("Vite client pipeline serves dev modules while Bun owns the stream runtime", async () => {
+    const root = join(import.meta.dir, "..", ".tmp", `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    await writeFile(clientEntry, "console.log('vite host test');\n");
+    await writeFile(
+      shellPath,
+      '<html><body><div id="root"></div><script type="module" src="/client.js"></script></body></html>',
+    );
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir: join(root, "dist"),
+      port: 0,
+      dev: { watch: true },
+      client: {
+        kind: "vite",
+        root,
+        reactCompiler: false,
+      },
+    });
+
+    try {
+      const htmlResponse = await fetch(`http://localhost:${server.port}/`);
+      const html = await htmlResponse.text();
+      const clientResponse = await fetch(`http://localhost:${server.port}/client.ts`);
+
+      expect(html).toContain("/@vite/client");
+      expect(html).toContain("/client.ts");
+      expect(await clientResponse.text()).toContain("vite host test");
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 function createFanoutRuntime() {

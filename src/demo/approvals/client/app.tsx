@@ -2,6 +2,7 @@ import { mountProgramReact } from "../../../adapters/react";
 import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
 import type { ApprovalProjection } from "../types";
 import { ApprovalApp } from "./approval-app";
+import "./styles.css";
 
 declare global {
   interface Window {

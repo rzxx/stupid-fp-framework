@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   parseClientEnvelope,
   type ClientEnvelope,
@@ -21,6 +21,20 @@ export type BunStyleAsset = {
   build?: (asset: { input: string; output: string; route: string }) => void | Promise<void>;
 };
 
+export type BunClientPipeline =
+  | {
+      kind?: "bun";
+    }
+  | {
+      kind: "vite";
+      root?: string;
+      outdir?: string;
+      dev?: {
+        port?: number;
+      };
+      reactCompiler?: boolean;
+    };
+
 export type BunRuntime<TInput, TProjection, TTrace> = {
   connect: (
     envelope: Extract<ClientEnvelope<TInput>, { type: "connect" }>,
@@ -35,6 +49,7 @@ export type BunProgramHostOptions<TInput, TProjection, TTrace> = {
   rootDir: string;
   clientEntry: string;
   shellPath: string;
+  client?: BunClientPipeline;
   assets?: {
     styles?: BunStyleAsset[];
   };
@@ -58,15 +73,14 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
   options: BunProgramHostOptions<TInput, TProjection, TTrace>,
 ): Promise<Bun.Server<BunSocketData>> {
   const outdir = options.outdir ?? join(options.rootDir, "..", "dist");
-  const clientOut = join(outdir, "app.js");
   const devState: BunDevState = { lastBuildError: null };
   const delivery = new SocketDelivery<TProjection, TTrace>();
   const reload = new DevReloadDelivery();
 
-  await buildClient(options.clientEntry, outdir);
+  const client = await prepareClient(options, outdir, devState);
   const assets = await prepareAssets(options, outdir, devState);
   const watchers = options.dev?.watch
-    ? watchDevInputs(options, outdir, assets, reload, devState)
+    ? watchDevInputs(options, outdir, assets, client, reload, devState)
     : [];
 
   const server = Bun.serve<BunSocketData>({
@@ -98,9 +112,13 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
       }
 
       if (url.pathname === "/client.js") {
-        return new Response(Bun.file(clientOut), {
-          headers: { "Content-Type": "text/javascript; charset=utf-8" },
-        });
+        return client.serveClientJs();
+      }
+
+      const clientResponse = await client.serve(request);
+
+      if (clientResponse) {
+        return clientResponse;
       }
 
       const asset = assets.byRoute.get(url.pathname);
@@ -125,7 +143,10 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
           const shell = await Bun.file(options.shellPath).text();
 
           return new Response(
-            injectDevReload(injectInitialRender(shell, rendered, bootstrap), options),
+            await client.transformHtml(
+              request,
+              injectDevReload(injectInitialRender(shell, rendered, bootstrap), options),
+            ),
             {
               headers: { "Content-Type": "text/html; charset=utf-8" },
             },
@@ -134,7 +155,7 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
       }
 
       const shell = await Bun.file(options.shellPath).text();
-      return new Response(injectDevReload(shell, options), {
+      return new Response(await client.transformHtml(request, injectDevReload(shell, options)), {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     },
@@ -180,6 +201,7 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
       watcher.close();
     }
 
+    void client.close();
     stop(closeActiveConnections);
   }) as typeof server.stop;
 
@@ -219,12 +241,13 @@ function watchDevInputs<TInput, TProjection, TTrace>(
   options: BunProgramHostOptions<TInput, TProjection, TTrace>,
   outdir: string,
   assets: PreparedAssets,
+  client: PreparedClient,
   reload: DevReloadDelivery,
   devState: BunDevState,
 ): FSWatcher[] {
   let pending: unknown = null;
   const watched = new Set([
-    dirname(options.clientEntry),
+    ...(options.client?.kind === "vite" ? [] : [dirname(options.clientEntry)]),
     ...assets.styles.flatMap((asset) => asset.watchPaths),
   ]);
   const rebuild = () => {
@@ -234,7 +257,7 @@ function watchDevInputs<TInput, TProjection, TTrace>(
 
     pending = setTimeout(() => {
       pending = null;
-      void rebuildDevOutputs(options, outdir, assets, reload, devState);
+      void rebuildDevOutputs(options, outdir, assets, client, reload, devState);
     }, 40);
   };
 
@@ -245,11 +268,12 @@ async function rebuildDevOutputs<TInput, TProjection, TTrace>(
   options: BunProgramHostOptions<TInput, TProjection, TTrace>,
   outdir: string,
   assets: PreparedAssets,
+  client: PreparedClient,
   reload: DevReloadDelivery,
   devState: BunDevState,
 ): Promise<void> {
   try {
-    await buildClient(options.clientEntry, outdir);
+    await client.rebuild();
     await buildStyleAssets(assets.styles);
     devState.lastBuildError = null;
     reload.reload();
@@ -258,6 +282,39 @@ async function rebuildDevOutputs<TInput, TProjection, TTrace>(
     devState.lastBuildError = message;
     reload.error(message);
   }
+}
+
+async function prepareClient<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
+  outdir: string,
+  devState: BunDevState,
+): Promise<PreparedClient> {
+  if (options.client?.kind === "vite") {
+    return prepareViteClient(options, outdir, devState, options.client);
+  }
+
+  const clientOut = join(outdir, "app.js");
+  await buildClient(options.clientEntry, outdir);
+
+  return {
+    async transformHtml(_request, html) {
+      return html;
+    },
+    async serve(_request) {
+      return null;
+    },
+    serveClientJs() {
+      return new Response(Bun.file(clientOut), {
+        headers: { "Content-Type": "text/javascript; charset=utf-8" },
+      });
+    },
+    async rebuild() {
+      await buildClient(options.clientEntry, outdir);
+    },
+    async close() {
+      return undefined;
+    },
+  };
 }
 
 async function prepareAssets<TInput, TProjection, TTrace>(
@@ -382,6 +439,86 @@ function serializeBootstrap<TProjection, TTrace>(
   return JSON.stringify(bootstrap).replaceAll("<", "\\u003c");
 }
 
+type ViteManifestEntry = {
+  file: string;
+  css?: string[];
+  imports?: string[];
+};
+
+function viteEntryRoute(root: string, entrypoint: string): string {
+  const absolute = isAbsolute(entrypoint) ? entrypoint : join(root, entrypoint);
+  return `/${relative(root, absolute).replaceAll(sep, "/")}`;
+}
+
+async function proxyViteAsset(origin: string, request: Request): Promise<Response | null> {
+  const url = new URL(request.url);
+
+  if (!isViteAssetPath(url.pathname)) {
+    return null;
+  }
+
+  const upstream = await fetch(`${origin}${url.pathname}${url.search}`);
+  return new Response(upstream.body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers: upstream.headers,
+  });
+}
+
+function isViteAssetPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/@vite/") ||
+    pathname.startsWith("/@react-refresh") ||
+    pathname.startsWith("/@id/") ||
+    pathname.startsWith("/@fs/") ||
+    pathname.startsWith("/node_modules/") ||
+    pathname.startsWith("/src/") ||
+    pathname.includes("/demo/") ||
+    /\.[cm]?[tj]sx?$/.test(pathname) ||
+    pathname.endsWith(".css")
+  );
+}
+
+function replaceClientScript(html: string, entry: string): string {
+  return html.replace(
+    /<script type="module" src="\/client\.js"><\/script>/,
+    `<script type="module" src="${entry}"></script>`,
+  );
+}
+
+function prefixViteDevAssets(html: string, origin: string): string {
+  return html.replaceAll(
+    /(src|href)="\/(@vite|@react-refresh|@id|@fs|node_modules|src|demo|client)/g,
+    `$1="${origin}/$2`,
+  );
+}
+
+function removeClientScript(html: string): string {
+  return html.replace(/<script type="module" src="\/client\.js"><\/script>/, "");
+}
+
+function injectViteProductionAssets(html: string, entry: ViteManifestEntry): string {
+  const styles = (entry.css ?? [])
+    .map((file) => `<link rel="stylesheet" href="/${file}" />`)
+    .join("");
+  const script = `<script type="module" src="/${entry.file}"></script>`;
+  const tags = `${styles}${script}`;
+
+  return html.includes("</body>") ? html.replace("</body>", `${tags}</body>`) : `${html}${tags}`;
+}
+
+function contentType(pathname: string): string {
+  if (pathname.endsWith(".css")) {
+    return "text/css; charset=utf-8";
+  }
+
+  if (pathname.endsWith(".js")) {
+    return "text/javascript; charset=utf-8";
+  }
+
+  return "application/octet-stream";
+}
+
 async function buildClient(entrypoint: string, outdir: string): Promise<void> {
   await mkdir(dirname(join(outdir, "app.js")), { recursive: true });
 
@@ -436,6 +573,14 @@ type PreparedAssets = {
   byRoute: Map<string, PreparedStyleAsset>;
 };
 
+type PreparedClient = {
+  transformHtml: (request: Request, html: string) => Promise<string>;
+  serve: (request: Request) => Promise<Response | null>;
+  serveClientJs: () => Response | Promise<Response>;
+  rebuild: () => Promise<void>;
+  close: () => Promise<void>;
+};
+
 type PreparedStyleAsset = {
   input: string;
   route: string;
@@ -443,6 +588,113 @@ type PreparedStyleAsset = {
   watchPaths: string[];
   build?: BunStyleAsset["build"];
 };
+
+async function prepareViteClient<TInput, TProjection, TTrace>(
+  options: BunProgramHostOptions<TInput, TProjection, TTrace>,
+  outdir: string,
+  devState: BunDevState,
+  client: Extract<BunClientPipeline, { kind: "vite" }>,
+): Promise<PreparedClient> {
+  const vite = await import("vite");
+  const { default: react, reactCompilerPreset } = await import("@vitejs/plugin-react");
+  const { default: babel } = await import("@rolldown/plugin-babel");
+  const root = client.root ?? options.rootDir;
+  const entry = viteEntryRoute(root, options.clientEntry);
+  const clientOutdir = client.outdir ?? join(outdir, "client");
+  const plugins = client.reactCompiler
+    ? [react(), babel({ presets: [reactCompilerPreset()] })]
+    : [react()];
+
+  if (options.dev?.watch) {
+    const server = await vite.createServer({
+      root,
+      appType: "custom",
+      clearScreen: false,
+      logLevel: "error",
+      plugins,
+      server: {
+        hmr: true,
+        port: client.dev?.port,
+        strictPort: false,
+      },
+    });
+    await server.listen();
+    const urls = server.resolvedUrls;
+    const origin = urls?.local[0]?.replace(/\/$/, "") ?? `http://localhost:5173`;
+
+    return {
+      async transformHtml(request, html) {
+        const withEntry = replaceClientScript(html, entry);
+        const transformed = await server.transformIndexHtml(
+          new URL(request.url).pathname,
+          withEntry,
+        );
+        return prefixViteDevAssets(transformed, origin);
+      },
+      async serve(request) {
+        return proxyViteAsset(origin, request);
+      },
+      serveClientJs() {
+        return Response.redirect(`${origin}${entry}`, 302);
+      },
+      async rebuild() {
+        devState.lastBuildError = null;
+      },
+      async close() {
+        await server.close();
+      },
+    };
+  }
+
+  await vite.build({
+    root,
+    appType: "custom",
+    plugins,
+    build: {
+      outDir: clientOutdir,
+      emptyOutDir: true,
+      manifest: true,
+      rollupOptions: {
+        input: options.clientEntry,
+      },
+    },
+  });
+  const manifest = (await Bun.file(join(clientOutdir, ".vite", "manifest.json")).json()) as Record<
+    string,
+    ViteManifestEntry
+  >;
+  const manifestEntry = manifest[relative(root, options.clientEntry).replaceAll(sep, "/")];
+
+  if (!manifestEntry) {
+    throw new Error("Vite client build did not produce a manifest entry");
+  }
+
+  return {
+    async transformHtml(_request, html) {
+      return injectViteProductionAssets(removeClientScript(html), manifestEntry);
+    },
+    async serve(request) {
+      const url = new URL(request.url);
+
+      if (!url.pathname.startsWith("/assets/")) {
+        return null;
+      }
+
+      return new Response(Bun.file(join(clientOutdir, url.pathname)), {
+        headers: { "Content-Type": contentType(url.pathname) },
+      });
+    },
+    serveClientJs() {
+      return Response.redirect(`/${manifestEntry.file}`, 302);
+    },
+    async rebuild() {
+      return undefined;
+    },
+    async close() {
+      return undefined;
+    },
+  };
+}
 
 class SocketDelivery<TProjection, TTrace> {
   readonly #viewsockets = new Map<string, Set<Bun.ServerWebSocket<unknown>>>();

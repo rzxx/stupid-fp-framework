@@ -17,14 +17,10 @@ const server = await serveBunProgram<ApprovalClientInput, ApprovalProjection, Tr
   rootDir: root,
   clientEntry: join(root, "demo", "approvals", "client", "app.tsx"),
   shellPath: join(root, "shell.html"),
-  assets: {
-    styles: [
-      {
-        input: join(root, "demo", "approvals", "client", "styles.css"),
-        route: "/styles.css",
-        output: "styles.css",
-      },
-    ],
+  client: {
+    kind: "vite",
+    root,
+    reactCompiler: true,
   },
   port,
   dev: {

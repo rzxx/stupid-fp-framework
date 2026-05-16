@@ -31,7 +31,7 @@ Every meaningful input can leave a trace that explains why the UI changed.
 
 ## this is
 
-- A **Bun-native** framework (no webpack, no vite by default — just `bun --hot`)
+- A **Bun-hosted runtime with a Vite client pipeline** — Bun owns the program/stream host; Vite owns browser modules, CSS, React Refresh, and React Compiler wiring
 - **Effect-native workflow runtime** — typed, composable, testable server logic
 - **Resource-driven** — define your data as resources, and the runtime automatically tracks who reads what
 - **Program-owned state** — durable workflow truth stays in resources/actions; server-observed view/editing context is modeled as `UIState`
@@ -119,7 +119,10 @@ const screen = Screen.define("approval.deployments")
   .route("/teams/:teamId/deployments", {
     params: Schema.Struct({ teamId: Schema.String }),
   })
-  .patchManifest(approvalProjectionPatchManifest)
+  .regions({
+    layout: Region.merge(),
+    pendingDeployments: Region.replace(),
+  })
   .project((view, ctx) =>
     Effect.gen(function* () {
       return {
@@ -246,8 +249,9 @@ That's the bet. It might be wrong. But it's the reason this repo exists.
 ## built with
 
 - **[Bun](https://bun.sh)** — runtime, bundler, test runner, package manager
+- **[Vite](https://vite.dev)** — browser client pipeline for modules, CSS, React Refresh, and production assets
 - **[Effect](https://effect.website)** — typed effects for server logic
-- **[React 19](https://react.dev)** — UI rendering layer
+- **[React 19](https://react.dev)** — UI rendering layer with adapter-owned root, provider, optimistic, and error-boundary conventions
 
 ---
 

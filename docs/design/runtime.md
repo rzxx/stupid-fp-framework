@@ -32,9 +32,11 @@ flowchart LR
   Views --> Trace
 ```
 
-### Bun Host
+### Bun Host And Client Pipeline
 
-The Bun host is the first runtime target.
+The Bun host is the first server runtime target. The browser client pipeline can be Bun-built for
+small fixtures, but the current default demo path uses Vite for browser modules, CSS, React Refresh,
+and React Compiler integration.
 
 Responsibilities:
 
@@ -42,8 +44,8 @@ Responsibilities:
 - provide request and socket entrypoints
 - load the server program
 - host the custom stream transport
-- integrate with Bun's bundling and dev server capabilities over time
-- run Bun-native asset hooks for styles and other development outputs
+- integrate with a client asset pipeline such as Vite without moving program runtime ownership into the client dev server
+- keep Bun-native asset hooks available for low-level fixtures and custom style build outputs
 - provide the first local development story
 
 Bun should be treated as the practical host, not the whole architecture. The model should still be shaped by serverless constraints: processes can die, memory can disappear, and reconnect should be expected.
@@ -159,6 +161,8 @@ The React adapter renders projections and hosts React components.
 Responsibilities:
 
 - mount the app shell
+- provide root hydration/render helpers and React 19 root error callbacks
+- expose a provider/context hook layer over the lower-level stream client
 - connect browser events to framework inputs
 - render server projections
 - host client islands
