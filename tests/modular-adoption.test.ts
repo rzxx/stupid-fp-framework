@@ -13,6 +13,9 @@ import { serveViteProgram } from "stupid-fp-framework/vite";
 
 describe("modular adoption surface", () => {
   test("public subpath exports are importable without the full framework barrel", () => {
+    const packageJson = JSON.parse(
+      readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
+    ) as { exports: Record<string, string> };
     const traces = new TraceStore();
     const graph = new ResourceGraph();
     const store = new MemoryRuntimeStore<Record<string, never>, Record<string, never>>();
@@ -26,6 +29,8 @@ describe("modular adoption surface", () => {
     });
     expect(reactOptions).toBeNull();
     expect(typeof serveViteProgram).toBe("function");
+    expect(packageJson.exports["./vite"]).toBe("./src/vite.ts");
+    expect(packageJson.exports["./bun"]).toBeUndefined();
   });
 
   test("trace can be used standalone with browser-safe snapshots", () => {

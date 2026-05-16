@@ -206,6 +206,7 @@ bun dev
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
 ```sh
+bun build         # builds the Vite client and SSR server outputs
 bun test          # runs the contract + integration + acceptance tests
 bun typecheck     # tsc --noEmit
 bun check         # typecheck + lint + format check
@@ -231,7 +232,7 @@ Start small and climb:
 2. **Resource tracking** — use `ResourceGraph` to track which named regions read which resources
 3. **Runtime stores** — experiment with checkpoints, cursors, envelopes, and observation indexes
 4. **Promise-first resources, actions, and screens** — author with `async/await` via `load`, `run`, and `project`
-5. **Stream/patch + React/Bun adapters** — add live transport and rendering when useful
+5. **Stream/patch + React/Vite adapters** — add live transport, rendering, and the Vite host when useful
 6. **Full durable program** — buy the whole model when you're ready
 
 ```ts
@@ -279,7 +280,7 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Proposal](docs/proposal.md)** — the original pitch
 - **[Experiments & Open Questions](docs/design/experiments.md)** — what's still being figured out
 - **[Stage 8 Record](docs/stage-8-record.md)** — current invocation, recovery, and adapter contract implementation record
-- **[Stage 9 Record](docs/stage-9-record.md)** — implementation record for patch manifests, navigation, Bun assets, and builder APIs
+- **[Stage 9 Record](docs/stage-9-record.md)** — implementation record for patch manifests, navigation, and builder APIs
 - **[Framework State Review 7](docs/framework-state-review-7.md)** — Stage 10 semantic hardening for state ownership, resource scopes, and trace-first positioning
 - **[Framework State Review 8](docs/framework-state-review-8.md)** — modular adoption direction for subpath exports and Promise-first APIs
 
@@ -306,8 +307,8 @@ That's the bet. It might be wrong. But it's the reason this repo exists.
 ## built with
 
 - **[Effect](https://effect.website)** — typed effects for advanced server logic (optional)
-- **[Bun](https://bun.sh)** — runtime, bundler, test runner, package manager
-- **[Vite](https://vite.dev)** — browser client pipeline for modules, CSS, React Refresh, and production assets
+- **[Bun](https://bun.sh)** — runtime, WebSocket host, test runner, package manager
+- **[Vite](https://vite.dev)** — canonical host pipeline for client modules, CSS, React Refresh, SSR transforms, and production assets
 - **[React 19](https://react.dev)** — UI rendering layer with adapter-owned root, provider, optimistic, and error-boundary conventions
 
 ---

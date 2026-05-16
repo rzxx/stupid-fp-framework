@@ -10,7 +10,8 @@ At one level down, the framework is a set of cooperating parts.
 flowchart LR
   Browser["Browser + React Adapter"]
   Stream["Framework Stream"]
-  Bun["Bun Host"]
+  Host["Vite Program Host"]
+  Bun["Bun Runtime"]
   Runtime["Server Program Runtime"]
   Actions["Action / Effect Executor"]
   Resources["Resource Graph"]
@@ -19,8 +20,9 @@ flowchart LR
   Durable["Durable State"]
 
   Browser <--> Stream
-  Stream <--> Bun
-  Bun <--> Runtime
+  Stream <--> Host
+  Host <--> Bun
+  Host <--> Runtime
   Runtime <--> Actions
   Runtime <--> Resources
   Runtime <--> Views
@@ -32,23 +34,24 @@ flowchart LR
   Views --> Trace
 ```
 
-### Bun Host And Client Pipeline
+### Vite Program Host
 
-The Bun host is the first server runtime target. The browser client pipeline can be Bun-built for
-small fixtures, but the current default demo path uses Vite for browser modules, CSS, React Refresh,
-and React Compiler integration.
+The Vite program host is the canonical local host. Vite owns browser modules, CSS, React Refresh,
+React Compiler integration, SSR transforms, and production manifests. Bun remains the concrete
+runtime for HTTP, WebSockets, tests, and package execution.
 
 Responsibilities:
 
-- serve the development shell
+- serve the Vite HTML template
 - provide request and socket entrypoints
-- load the server program
+- load the server program through the Vite server-entry contract
 - host the custom stream transport
-- integrate with a client asset pipeline such as Vite without moving program runtime ownership into the client dev server
-- keep Bun-native asset hooks available for low-level fixtures and custom style build outputs
+- integrate Vite client and SSR builds without moving program runtime ownership into React
 - provide the first local development story
 
-Bun should be treated as the practical host, not the whole architecture. The model should still be shaped by serverless constraints: processes can die, memory can disappear, and reconnect should be expected.
+Bun should be treated as the practical runtime, not the framework architecture. The model should
+still be shaped by serverless constraints: processes can die, memory can disappear, and reconnect
+should be expected.
 
 ### Server Program Runtime
 
