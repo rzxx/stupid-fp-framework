@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
-import { useProgramStream, type ProgramStreamReactOptions } from "../../../adapters/react";
+import {
+  ProgramStreamProvider,
+  useProgramStreamState,
+  type ProgramStreamReactOptions,
+} from "../../../adapters/react";
 import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
 import type { ApprovalClientInput, ApprovalProjection } from "../types";
 
@@ -18,9 +22,17 @@ export function ApprovalApp(props: {
       router: { mode: "history" },
     };
   }, [props.bootstrap]);
-  const stream = useProgramStream<ApprovalClientInput, ApprovalProjection, TraceSnapshot>(
-    streamOptions,
+  return (
+    <ProgramStreamProvider<ApprovalClientInput, ApprovalProjection, TraceSnapshot>
+      options={streamOptions}
+    >
+      <ApprovalWorkspace />
+    </ProgramStreamProvider>
   );
+}
+
+function ApprovalWorkspace() {
+  const stream = useProgramStreamState<ApprovalClientInput, ApprovalProjection, TraceSnapshot>();
   const [deploymentFilter, setDeploymentFilter] = useState("");
 
   const projection = stream.projection.value;
