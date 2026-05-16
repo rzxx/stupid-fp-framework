@@ -528,37 +528,57 @@ function injectViteProductionAssets(
   entry: ViteManifestEntry,
 ): string {
   const styleFiles = new Set<string>();
-  const visited = new Set<ViteManifestEntry>();
+  const importedChunks = collectViteImportedChunks(manifest, entry);
 
-  function collectStyles(manifestEntry: ViteManifestEntry): void {
-    if (visited.has(manifestEntry)) {
-      return;
-    }
-
-    visited.add(manifestEntry);
-
-    for (const file of manifestEntry.css ?? []) {
-      styleFiles.add(file);
-    }
-
-    for (const imported of manifestEntry.imports ?? []) {
-      const importedEntry = manifest[imported];
-
-      if (importedEntry) {
-        collectStyles(importedEntry);
-      }
-    }
+  for (const file of entry.css ?? []) {
+    styleFiles.add(file);
   }
 
-  collectStyles(entry);
+  for (const imported of importedChunks) {
+    for (const file of imported.css ?? []) {
+      styleFiles.add(file);
+    }
+  }
 
   const styles = [...styleFiles]
     .map((file) => `<link rel="stylesheet" href="/${file}" />`)
     .join("");
   const script = `<script type="module" src="/${entry.file}"></script>`;
-  const tags = `${styles}${script}`;
+  const modulepreloads = importedChunks
+    .map((chunk) => `<link rel="modulepreload" href="/${chunk.file}" />`)
+    .join("");
+  const tags = `${styles}${script}${modulepreloads}`;
 
   return html.includes("</body>") ? html.replace("</body>", `${tags}</body>`) : `${html}${tags}`;
+}
+
+function collectViteImportedChunks(
+  manifest: Record<string, ViteManifestEntry>,
+  entry: ViteManifestEntry,
+): ViteManifestEntry[] {
+  const chunks: ViteManifestEntry[] = [];
+  const seen = new Set<string>();
+
+  function visit(chunk: ViteManifestEntry): void {
+    for (const imported of chunk.imports ?? []) {
+      if (seen.has(imported)) {
+        continue;
+      }
+
+      const importedEntry = manifest[imported];
+
+      if (!importedEntry) {
+        continue;
+      }
+
+      seen.add(imported);
+      visit(importedEntry);
+      chunks.push(importedEntry);
+    }
+  }
+
+  visit(entry);
+  return chunks;
 }
 
 function contentType(pathname: string): string {
@@ -578,8 +598,24 @@ function contentType(pathname: string): string {
     return "image/png";
   }
 
+  if (pathname.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  if (pathname.endsWith(".avif")) {
+    return "image/avif";
+  }
+
   if (pathname.endsWith(".ico")) {
     return "image/x-icon";
+  }
+
+  if (pathname.endsWith(".woff")) {
+    return "font/woff";
+  }
+
+  if (pathname.endsWith(".woff2")) {
+    return "font/woff2";
   }
 
   if (pathname.endsWith(".json")) {
