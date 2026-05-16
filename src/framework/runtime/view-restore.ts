@@ -34,7 +34,12 @@ export function createViewRestorer<TUIState, TUIEvent, TProjection>(deps: {
 
     for (const snapshot of snapshots) {
       if (!deps.views.get(snapshot.viewId)) {
-        deps.views.restore(snapshot);
+        const view = deps.views.restore(snapshot);
+        await deps.runViewHooks(
+          "restore",
+          view,
+          defaultInvocationContext({ fanoutScope: view.fanoutScope, principal: view.principal }),
+        );
       }
     }
 

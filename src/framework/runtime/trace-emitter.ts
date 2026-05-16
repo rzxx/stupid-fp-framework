@@ -12,20 +12,27 @@ export function createTraceEmitter<TUIState, TUIEvent, TProjection>(deps: {
   ) => Promise<void>;
   runTraceHooks: (trace: TraceSnapshot, invocation: InvocationContextValue) => Promise<void>;
 }) {
+  async function persistTraceEnvelope(
+    view: ViewContext<TUIState>,
+    snapshot: TraceSnapshot,
+  ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
+    const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
+      type: "trace:update",
+      viewId: view.viewId,
+      cursor: "",
+      trace: snapshot,
+    };
+    await deps.persistEnvelope(view, envelope);
+    return envelope;
+  }
+
   async function traceEnvelope(
     view: ViewContext<TUIState>,
     trace: TraceSnapshot,
     invocation: InvocationContextValue,
   ): Promise<ServerEnvelope<TProjection, TraceSnapshot>> {
     await deps.runTraceHooks(trace, invocation);
-    const envelope: ServerEnvelope<TProjection, TraceSnapshot> = {
-      type: "trace:update",
-      viewId: view.viewId,
-      cursor: "",
-      trace: deps.traces.snapshot(trace, "browser"),
-    };
-    await deps.persistEnvelope(view, envelope);
-    return envelope;
+    return persistTraceEnvelope(view, deps.traces.snapshot(trace, "browser"));
   }
 
   async function traceEnvelopesFor(
@@ -43,12 +50,14 @@ export function createTraceEmitter<TUIState, TUIEvent, TProjection>(deps: {
     }
 
     const traceEnvelopes: ServerEnvelope<TProjection, TraceSnapshot>[] = [];
+    await deps.runTraceHooks(trace, invocation);
+    const snapshot = deps.traces.snapshot(trace, "browser");
 
     for (const viewId of targetViewIds) {
       const targetView = deps.views.get(viewId);
 
       if (targetView) {
-        traceEnvelopes.push(await traceEnvelope(targetView, trace, invocation));
+        traceEnvelopes.push(await persistTraceEnvelope(targetView, snapshot));
       }
     }
 

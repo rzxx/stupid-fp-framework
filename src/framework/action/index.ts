@@ -6,6 +6,7 @@ import { acceptsSchema, type FrameworkSchema } from "../schema";
 import type { TraceSnapshot, TraceStore } from "../trace";
 
 export type ActionFailure = {
+  type: "action-error";
   message: string;
   detail?: JsonRecord;
 };
@@ -42,7 +43,7 @@ export type ActionExecution = {
 };
 
 export function actionFailure(message: string, detail?: JsonRecord): ActionFailure {
-  return { message, detail };
+  return { type: "action-error", message, detail };
 }
 
 export function rejectAction(message: string, detail?: JsonRecord): never {
@@ -100,9 +101,16 @@ function isActionFailure(value: unknown): value is ActionFailure {
   return (
     value !== null &&
     typeof value === "object" &&
+    "type" in value &&
+    value.type === "action-error" &&
     "message" in value &&
-    typeof value.message === "string"
+    typeof value.message === "string" &&
+    (!("detail" in value) || value.detail === undefined || isJsonRecord(value.detail))
   );
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export async function executeAction<R, TInput extends { type: string }>(

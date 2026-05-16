@@ -1,5 +1,5 @@
 import type { JsonValue } from "../json";
-import type { ProjectionRegionSnapshot } from "../projection";
+import type { ProjectionRegionSnapshot } from "../observation";
 
 export type ConnectEnvelope = {
   type: "connect";
@@ -131,37 +131,55 @@ export type ServerEnvelope<TProjection, TTrace> =
 export function parseClientEnvelope<TInput>(
   payload: string,
 ): ClientEnvelope<TInput> | ErrorEnvelope {
+  let parsed: unknown;
+
   try {
-    const value = JSON.parse(payload) as Partial<ClientEnvelope<TInput>>;
-
-    if (value.type === "connect") {
-      if (typeof value.route !== "string" || !isStringRecord(value.params)) {
-        return { type: "error", message: "Invalid connect envelope" };
-      }
-
-      if (value.resume !== undefined && !isResume(value.resume)) {
-        return { type: "error", message: "Invalid resume envelope" };
-      }
-
-      return value as ConnectEnvelope;
-    }
-
-    if (value.type === "input") {
-      if (typeof value.viewId !== "string" || !isInputPayload(value.input)) {
-        return { type: "error", message: "Invalid input envelope" };
-      }
-
-      if (value.clientInputId !== undefined && typeof value.clientInputId !== "string") {
-        return { type: "error", message: "Invalid client input id" };
-      }
-
-      return value as ClientInputEnvelope<TInput>;
-    }
-
-    return { type: "error", message: "Unknown envelope type" };
+    parsed = JSON.parse(payload);
   } catch {
     return { type: "error", message: "Malformed JSON envelope" };
   }
+
+  if (!isEnvelopeObject(parsed)) {
+    return { type: "error", message: "Invalid envelope shape" };
+  }
+
+  const value = parsed as Partial<ClientEnvelope<TInput>>;
+
+  if (value.type === "connect") {
+    if (typeof value.route !== "string" || !isStringRecord(value.params)) {
+      return { type: "error", message: "Invalid connect envelope" };
+    }
+
+    if (value.resume !== undefined && !isResume(value.resume)) {
+      return { type: "error", message: "Invalid resume envelope" };
+    }
+
+    return value as ConnectEnvelope;
+  }
+
+  if (value.type === "input") {
+    if (typeof value.viewId !== "string" || !isInputPayload(value.input)) {
+      return { type: "error", message: "Invalid input envelope" };
+    }
+
+    if (value.clientInputId !== undefined && typeof value.clientInputId !== "string") {
+      return { type: "error", message: "Invalid client input id" };
+    }
+
+    return value as ClientInputEnvelope<TInput>;
+  }
+
+  return { type: "error", message: "Unknown envelope type" };
+}
+
+function isEnvelopeObject(value: unknown): value is { type: string } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "type" in value &&
+    typeof value.type === "string"
+  );
 }
 
 function isInputPayload(value: unknown): value is { type: string } {

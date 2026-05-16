@@ -31,7 +31,7 @@ export function createRuntimeRouter<
         route: screenRoutePattern(exact),
         params: matched?.params ?? params,
       };
-      await runRouteHooks(route, params, resolved.route);
+      await runRouteHooks(route, resolved.params, resolved.route);
       return resolved;
     }
 
@@ -40,7 +40,7 @@ export function createRuntimeRouter<
       const matched = definition?.match(route, params);
 
       if (matched) {
-        await runRouteHooks(route, params, matched.route);
+        await runRouteHooks(route, matched.params, matched.route);
         return matched;
       }
     }

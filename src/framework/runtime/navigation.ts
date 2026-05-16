@@ -87,5 +87,22 @@ export function isNavigateInput(value: unknown): value is NavigateInput {
   }
 
   const input = value as Record<string, unknown>;
-  return input.type === "system.navigate" && typeof input.path === "string";
+  return (
+    input.type === "system.navigate" &&
+    typeof input.path === "string" &&
+    (input.params === undefined || isStringRecord(input.params)) &&
+    (input.navigation === undefined || isNavigationMethod(input.navigation))
+  );
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function isNavigationMethod(value: unknown): value is NavigateInput["navigation"] {
+  return value === "push" || value === "replace" || value === "pop" || value === "hash";
 }

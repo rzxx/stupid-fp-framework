@@ -201,7 +201,7 @@ class ResourceBuilder<TValue> {
   }
 }
 
-export class ResourceGraph<R> {
+export class ResourceGraph<R = never> {
   readonly #definitions = new Map<string, ResourceDefinition<R, unknown>>();
   readonly #cache = new Map<string, ResourceSnapshot>();
   readonly #observerStorage = new AsyncLocalStorage<ResourceObservationScope>();
@@ -254,18 +254,19 @@ export class ResourceGraph<R> {
             (hook) => hook.beforeRead?.({ key: serializeResourceKey(scopedKey) }) ?? Effect.void,
           ),
           () =>
-            Effect.flatMap(
-              Effect.try({
-                try: () => definition.load(scopedKey) as Effect.Effect<TValue, ResourceFailure, R>,
-                catch: (error) =>
+            Effect.suspend(() => {
+              try {
+                return definition.load(scopedKey) as Effect.Effect<TValue, ResourceFailure, R>;
+              } catch (error) {
+                return Effect.fail(
                   resourceFailure(
                     key.type,
                     error instanceof Error ? error.message : "Resource loader failed",
                     key.id,
                   ),
-              }),
-              (effect) => effect,
-            ),
+                );
+              }
+            }),
         );
 
         return Effect.tapError(
@@ -292,8 +293,8 @@ export class ResourceGraph<R> {
     );
   }
 
-  async readAsync<TValue>(key: ResourceKey<TValue>): Promise<TValue> {
-    return Effect.runPromise(this.read(key) as Effect.Effect<TValue, never, never>);
+  async readAsync<TValue>(this: ResourceGraph<never>, key: ResourceKey<TValue>): Promise<TValue> {
+    return Effect.runPromise(this.read(key));
   }
 
   invalidate(keys: readonly ResourceKey[]): void {

@@ -179,7 +179,7 @@ class ScreenBuilder<R = never, TUIState = never, TProjection = never> {
     ) => Effect.Effect<TNextProjection, ProjectionFailure | ResourceFailure, TR>,
   ): ScreenDefinition<TR, TNextUIState, TNextProjection> {
     if (!this.#route) {
-      throw new Error(`Screen ${this.#id} must define a route before project()`);
+      throw new Error(`Screen ${this.#id} must define a route before projectEffect()`);
     }
 
     return {
