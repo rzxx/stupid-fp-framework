@@ -119,18 +119,18 @@ export async function serveBunProgram<TInput, TProjection, TTrace>(
         return client.serveClientJs();
       }
 
-      const clientResponse = await client.serve(request);
-
-      if (clientResponse) {
-        return clientResponse;
-      }
-
       const asset = assets.byRoute.get(url.pathname);
 
       if (asset) {
         return new Response(Bun.file(asset.output), {
           headers: { "Content-Type": "text/css; charset=utf-8" },
         });
+      }
+
+      const clientResponse = await client.serve(request);
+
+      if (clientResponse) {
+        return clientResponse;
       }
 
       if (options.initialRender) {
@@ -522,8 +522,37 @@ function removeClientScript(html: string): string {
   return html.replace(/<script type="module" src="\/client\.js"><\/script>/, "");
 }
 
-function injectViteProductionAssets(html: string, entry: ViteManifestEntry): string {
-  const styles = (entry.css ?? [])
+function injectViteProductionAssets(
+  html: string,
+  manifest: Record<string, ViteManifestEntry>,
+  entry: ViteManifestEntry,
+): string {
+  const styleFiles = new Set<string>();
+  const visited = new Set<ViteManifestEntry>();
+
+  function collectStyles(manifestEntry: ViteManifestEntry): void {
+    if (visited.has(manifestEntry)) {
+      return;
+    }
+
+    visited.add(manifestEntry);
+
+    for (const file of manifestEntry.css ?? []) {
+      styleFiles.add(file);
+    }
+
+    for (const imported of manifestEntry.imports ?? []) {
+      const importedEntry = manifest[imported];
+
+      if (importedEntry) {
+        collectStyles(importedEntry);
+      }
+    }
+  }
+
+  collectStyles(entry);
+
+  const styles = [...styleFiles]
     .map((file) => `<link rel="stylesheet" href="/${file}" />`)
     .join("");
   const script = `<script type="module" src="/${entry.file}"></script>`;
@@ -571,14 +600,8 @@ async function serveViteProductionAsset(
   return serveViteFile(clientOutdir, request, { denyViteMetadata: true });
 }
 
-async function serveVitePublicAsset(root: string, request: Request): Promise<Response | null> {
-  const url = new URL(request.url);
-
-  if (!isStaticAssetPath(url.pathname)) {
-    return null;
-  }
-
-  return serveViteFile(join(root, "public"), request);
+async function serveVitePublicAsset(publicDir: string, request: Request): Promise<Response | null> {
+  return serveViteFile(publicDir, request);
 }
 
 async function serveViteFile(
@@ -719,6 +742,7 @@ async function prepareViteClient<TInput, TProjection, TTrace>(
     await server.listen();
     const urls = server.resolvedUrls;
     const origin = urls?.local[0]?.replace(/\/$/, "") ?? `http://localhost:5173`;
+    const publicDir = server.config.publicDir;
 
     return {
       async transformHtml(request, html) {
@@ -731,7 +755,7 @@ async function prepareViteClient<TInput, TProjection, TTrace>(
       },
       async serve(request) {
         const url = new URL(request.url);
-        const publicAsset = await serveVitePublicAsset(root, request);
+        const publicAsset = await serveVitePublicAsset(publicDir, request);
 
         if (publicAsset) {
           return publicAsset;
@@ -786,7 +810,7 @@ async function prepareViteClient<TInput, TProjection, TTrace>(
 
   return {
     async transformHtml(_request, html) {
-      return injectViteProductionAssets(removeClientScript(html), manifestEntry);
+      return injectViteProductionAssets(removeClientScript(html), manifest, manifestEntry);
     },
     async serve(request) {
       return serveViteProductionAsset(clientOutdir, request);
