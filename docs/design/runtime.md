@@ -40,11 +40,16 @@ The Vite program host is the canonical local host. Vite owns browser modules, CS
 React Compiler integration, SSR transforms, and production manifests. Bun remains the concrete
 runtime for HTTP, WebSockets, tests, and package execution.
 
+Application entry metadata lives in `vite.config.ts` through `stupidFpVite()`. The Bun-side
+`serveViteProgram()` and `buildViteProgram()` helpers resolve that config instead of accepting
+duplicated template/client/server entry paths.
+
 Responsibilities:
 
 - serve the Vite HTML template
+- inject the framework client entry through Vite HTML transforms
 - provide request and socket entrypoints
-- load the server program through the Vite server-entry contract
+- load the server program through a Vite virtual server entry and ModuleRunner
 - host the custom stream transport
 - integrate Vite client and SSR builds without moving program runtime ownership into React
 - provide the first local development story

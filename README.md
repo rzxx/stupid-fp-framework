@@ -205,6 +205,25 @@ bun dev
 
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
+The host is configured through `vite.config.ts`:
+
+```ts
+import { defineConfig } from "vite";
+import { stupidFpVite } from "./src/vite";
+
+export default defineConfig({
+  root: "src",
+  plugins: [
+    stupidFpVite({
+      template: "index.html",
+      client: "demo/approvals/client/app.tsx",
+      server: "demo/approvals/server.ts",
+      reactCompiler: true,
+    }),
+  ],
+});
+```
+
 ```sh
 bun build         # builds the Vite client and SSR server outputs
 bun test          # runs the contract + integration + acceptance tests
