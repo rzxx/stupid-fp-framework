@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   parseClientEnvelope,
   type ClientEnvelope,
@@ -475,8 +475,17 @@ function isViteAssetPath(pathname: string): boolean {
     pathname.startsWith("/src/") ||
     pathname.includes("/demo/") ||
     /\.[cm]?[tj]sx?$/.test(pathname) ||
-    pathname.endsWith(".css")
+    pathname.endsWith(".css") ||
+    isStaticAssetPath(pathname)
   );
+}
+
+function isStaticAssetPath(pathname: string): boolean {
+  return /\.(?:avif|gif|ico|jpe?g|json|png|svg|txt|webp|woff2?)$/i.test(pathname);
+}
+
+function isViteTransformPath(pathname: string): boolean {
+  return /\.[cm]?[tj]sx?$/i.test(pathname);
 }
 
 function replaceClientScript(html: string, entry: string): string {
@@ -516,7 +525,80 @@ function contentType(pathname: string): string {
     return "text/javascript; charset=utf-8";
   }
 
+  if (pathname.endsWith(".svg")) {
+    return "image/svg+xml";
+  }
+
+  if (pathname.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (pathname.endsWith(".ico")) {
+    return "image/x-icon";
+  }
+
+  if (pathname.endsWith(".json")) {
+    return "application/json; charset=utf-8";
+  }
+
+  if (pathname.endsWith(".txt")) {
+    return "text/plain; charset=utf-8";
+  }
+
   return "application/octet-stream";
+}
+
+async function serveViteProductionAsset(
+  clientOutdir: string,
+  request: Request,
+): Promise<Response | null> {
+  return serveViteFile(clientOutdir, request, { denyViteMetadata: true });
+}
+
+async function serveVitePublicAsset(root: string, request: Request): Promise<Response | null> {
+  const url = new URL(request.url);
+
+  if (!isStaticAssetPath(url.pathname)) {
+    return null;
+  }
+
+  return serveViteFile(join(root, "public"), request);
+}
+
+async function serveViteFile(
+  root: string,
+  request: Request,
+  options?: { denyViteMetadata?: boolean },
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  let pathname: string;
+
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    return null;
+  }
+
+  if (pathname.includes("\0") || (options?.denyViteMetadata && pathname.startsWith("/.vite/"))) {
+    return null;
+  }
+
+  const assetPath = resolve(root, `.${pathname}`);
+  const routeToAsset = relative(root, assetPath);
+
+  if (routeToAsset.startsWith("..") || isAbsolute(routeToAsset)) {
+    return null;
+  }
+
+  const file = Bun.file(assetPath);
+
+  if (!(await file.exists())) {
+    return null;
+  }
+
+  return new Response(file, {
+    headers: { "Content-Type": contentType(pathname) },
+  });
 }
 
 async function buildClient(entrypoint: string, outdir: string): Promise<void> {
@@ -632,6 +714,23 @@ async function prepareViteClient<TInput, TProjection, TTrace>(
         return prefixViteDevAssets(transformed, origin);
       },
       async serve(request) {
+        const url = new URL(request.url);
+        const publicAsset = await serveVitePublicAsset(root, request);
+
+        if (publicAsset) {
+          return publicAsset;
+        }
+
+        if (isViteTransformPath(url.pathname)) {
+          const transformed = await server.transformRequest(`${url.pathname}${url.search}`);
+
+          if (transformed) {
+            return new Response(transformed.code, {
+              headers: { "Content-Type": "text/javascript; charset=utf-8" },
+            });
+          }
+        }
+
         return proxyViteAsset(origin, request);
       },
       serveClientJs() {
@@ -674,15 +773,7 @@ async function prepareViteClient<TInput, TProjection, TTrace>(
       return injectViteProductionAssets(removeClientScript(html), manifestEntry);
     },
     async serve(request) {
-      const url = new URL(request.url);
-
-      if (!url.pathname.startsWith("/assets/")) {
-        return null;
-      }
-
-      return new Response(Bun.file(join(clientOutdir, url.pathname)), {
-        headers: { "Content-Type": contentType(url.pathname) },
-      });
+      return serveViteProductionAsset(clientOutdir, request);
     },
     serveClientJs() {
       return Response.redirect(`/${manifestEntry.file}`, 302);
