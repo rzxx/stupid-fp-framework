@@ -311,7 +311,9 @@ const ApprovalScreen = Screen.define("approval.deployments")
   .route("/teams/:teamId/deployments", {
     params: Schema.Struct({ teamId: Schema.String }),
   })
-  .patchManifest(approvalProjectionPatchManifest)
+  .regions({
+    pendingDeployments: Region.replace(),
+  })
   .project((view, context) =>
     Effect.gen(function* () {
       return {

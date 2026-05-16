@@ -1,12 +1,12 @@
 import {
   Effect,
   Layout,
+  Region,
   Screen,
   Schema,
   type ProjectionContext,
   type ScreenDefinition,
 } from "../../framework";
-import { approvalProjectionPatchManifest } from "./projection-manifest";
 import {
   ActiveDeploymentRunsResource,
   AuditTrailResource,
@@ -37,7 +37,12 @@ export const approvalDeploymentsScreen: ScreenDefinition<
   .route("/teams/:teamId/deployments", {
     params: teamRouteParams,
   })
-  .patchManifest(approvalProjectionPatchManifest)
+  .regions<ApprovalProjection>({
+    layout: Region.merge(),
+    pendingDeployments: Region.replace(),
+    selectedDeployment: Region.replace(),
+    activeRuns: Region.replace(),
+  })
   .project((view, context) => {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;
@@ -77,7 +82,12 @@ export const approvalRunsScreen: ScreenDefinition<
   .route("/teams/:teamId/runs", {
     params: teamRouteParams,
   })
-  .patchManifest(approvalProjectionPatchManifest)
+  .regions<ApprovalProjection>({
+    layout: Region.merge(),
+    pendingDeployments: Region.replace(),
+    selectedDeployment: Region.replace(),
+    activeRuns: Region.replace(),
+  })
   .project((view, context) => {
     return Effect.gen(function* () {
       const teamId = view.params.teamId;

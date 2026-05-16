@@ -24,6 +24,12 @@ export type ProjectionPath = readonly (string | number)[];
 
 export type ProjectionRegionPatchStrategy<TProjection> =
   | {
+      kind: "replace-region";
+    }
+  | {
+      kind: "merge-fields";
+    }
+  | {
       kind: "replace-at-path";
       path: ProjectionPath;
     }
@@ -43,6 +49,8 @@ export type ProjectionPatchManifest<TProjection> = {
   projectionVersion: number;
   regions: Record<string, ProjectionRegionPatchStrategy<TProjection>>;
 };
+
+export type ProjectionRegionDefinition<TProjection> = ProjectionRegionPatchStrategy<TProjection>;
 
 export type ProjectionFailure = {
   type: "projection-error";
@@ -78,6 +86,23 @@ export const Layout = {
   },
 };
 
+export const Region = {
+  replace<TProjection = unknown>(): ProjectionRegionDefinition<TProjection> {
+    return { kind: "replace-region" };
+  },
+  merge<TProjection = unknown>(): ProjectionRegionDefinition<TProjection> {
+    return { kind: "merge-fields" };
+  },
+  custom<TProjection>(
+    apply: (projection: TProjection, value: JsonValue) => TProjection,
+  ): ProjectionRegionDefinition<TProjection> {
+    return { kind: "custom", apply };
+  },
+  replaceAt<TProjection = unknown>(path: ProjectionPath): ProjectionRegionDefinition<TProjection> {
+    return { kind: "replace-at-path", path };
+  },
+};
+
 export const Screen = {
   define(id: string) {
     return new ScreenBuilder(id);
@@ -110,6 +135,17 @@ class ScreenBuilder<R = never, TUIState = never, TProjection = never> {
   layout(layout: LayoutDefinition): ScreenBuilder<R, TUIState, TProjection> {
     this.#layout = layout;
     return this;
+  }
+
+  regions<TNextProjection>(
+    regions: Record<string, ProjectionRegionDefinition<TNextProjection>>,
+    options?: { projectionVersion?: number },
+  ): ScreenBuilder<R, TUIState, TNextProjection> {
+    this.#patchManifest = {
+      projectionVersion: options?.projectionVersion ?? 1,
+      regions,
+    } as ProjectionPatchManifest<TProjection>;
+    return this as unknown as ScreenBuilder<R, TUIState, TNextProjection>;
   }
 
   patchManifest<TNextProjection>(

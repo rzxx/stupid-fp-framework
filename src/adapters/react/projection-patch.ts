@@ -44,10 +44,12 @@ export function applyRegionValuePatch<TProjection>(
 }
 
 export function createProjectionPatchApplier<TProjection>(
-  manifest: ProjectionPatchManifest<TProjection>,
+  manifest?: ProjectionPatchManifest<TProjection>,
 ): (projection: TProjection, envelope: ProjectionPatchEnvelope) => TProjection {
   return (projection, envelope) =>
-    applyRegionValuePatchWithManifest(projection, envelope, manifest);
+    manifest
+      ? applyRegionValuePatchWithManifest(projection, envelope, manifest)
+      : applyRegionValuePatchAutomatically(projection, envelope);
 }
 
 export function applyRegionValuePatchWithManifest<TProjection>(
@@ -77,19 +79,42 @@ export function applyRegionValuePatchWithManifest<TProjection>(
       throw new Error(`No projection patch strategy registered for region: ${region.id}`);
     }
 
-    next = applyStrategy(next, region.value, strategy);
+    next = applyStrategy(next, region.id, region.value, strategy);
   }
 
   return next;
 }
 
+export function applyRegionValuePatchAutomatically<TProjection>(
+  projection: TProjection,
+  envelope: ProjectionPatchEnvelope,
+): TProjection {
+  if (envelope.patch.kind !== "region-values") {
+    return projection;
+  }
+
+  return envelope.patch.regions.reduce(
+    (current, region) => applyAutomaticRegionPatch(current, region.id, region.value),
+    projection,
+  );
+}
+
 function applyStrategy<TProjection>(
   projection: TProjection,
+  regionId: string,
   value: JsonValue,
   strategy: RegionValuePatchStrategy<TProjection>,
 ): TProjection {
   if (strategy.kind === "custom") {
     return strategy.apply(projection, value);
+  }
+
+  if (strategy.kind === "replace-region") {
+    return setPath(projection, [regionId], value);
+  }
+
+  if (strategy.kind === "merge-fields") {
+    return mergeFields(projection, value);
   }
 
   if (strategy.kind === "replace-at-path") {
@@ -100,6 +125,41 @@ function applyStrategy<TProjection>(
     const source = getPath(value, field.from);
     return setPath(current, field.to, source);
   }, projection);
+}
+
+function applyAutomaticRegionPatch<TProjection>(
+  projection: TProjection,
+  regionId: string,
+  value: JsonValue,
+): TProjection {
+  if (
+    projection !== null &&
+    typeof projection === "object" &&
+    !Array.isArray(projection) &&
+    regionId in projection
+  ) {
+    return setPath(projection, [regionId], value);
+  }
+
+  return mergeFields(projection, value);
+}
+
+function mergeFields<TProjection>(projection: TProjection, value: JsonValue): TProjection {
+  if (
+    projection !== null &&
+    typeof projection === "object" &&
+    !Array.isArray(projection) &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    return {
+      ...(projection as Record<string, unknown>),
+      ...(value as Record<string, unknown>),
+    } as TProjection;
+  }
+
+  return projection;
 }
 
 function setPath<TProjection>(

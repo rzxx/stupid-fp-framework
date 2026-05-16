@@ -198,6 +198,125 @@ describe("Bun host stream delivery", () => {
       server.stop(true);
     }
   });
+
+  test("Vite client pipeline serves dev modules while Bun owns the stream runtime", async () => {
+    const root = join(import.meta.dir, "..", ".tmp", `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(root, { recursive: true });
+    await mkdir(join(root, "public"), { recursive: true });
+    await mkdir(join(root, "public", ".well-known"), { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    const styleInput = join(root, "host.css");
+    await writeFile(clientEntry, "console.log('vite host test');\n");
+    await writeFile(join(root, "public", "favicon.svg"), "<svg>dev</svg>\n");
+    await writeFile(join(root, "public", ".well-known", "security"), "contact=dev\n");
+    await writeFile(styleInput, ".host { color: red; }\n");
+    await writeFile(
+      shellPath,
+      '<html><body><div id="root"></div><script type="module" src="/client.js"></script></body></html>',
+    );
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir: join(root, "dist"),
+      port: 0,
+      dev: { watch: true },
+      client: {
+        kind: "vite",
+        root,
+        reactCompiler: false,
+      },
+      assets: {
+        styles: [
+          {
+            input: styleInput,
+            route: "/assets/host.css",
+            build: async ({ input, output }) => {
+              const source = await readFile(input, "utf8");
+              await writeFile(output, `/* host */\n${source}`);
+            },
+          },
+        ],
+      },
+    });
+
+    try {
+      const htmlResponse = await fetch(`http://localhost:${server.port}/`);
+      const html = await htmlResponse.text();
+      const clientResponse = await fetch(`http://localhost:${server.port}/client.ts`);
+      const faviconResponse = await fetch(`http://localhost:${server.port}/favicon.svg`);
+      const wellKnownResponse = await fetch(`http://localhost:${server.port}/.well-known/security`);
+      const hostStyleResponse = await fetch(`http://localhost:${server.port}/assets/host.css`);
+      const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
+
+      expect(html).toContain("/@vite/client");
+      expect(html).toContain("/client.ts");
+      expect(await clientResponse.text()).toContain("vite host test");
+      expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
+      expect(await faviconResponse.text()).toContain("<svg>dev</svg>");
+      expect(await wellKnownResponse.text()).toContain("contact=dev");
+      expect(await hostStyleResponse.text()).toContain("/* host */");
+      expect(traversalResponse.status).not.toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("Vite client pipeline serves production manifest and public assets", async () => {
+    const root = join(import.meta.dir, "..", ".tmp", `stupid-fp-host-${crypto.randomUUID()}`);
+    await mkdir(join(root, "public"), { recursive: true });
+    await mkdir(join(root, "public", ".well-known"), { recursive: true });
+    const clientEntry = join(root, "client.ts");
+    const shellPath = join(root, "shell.html");
+    await writeFile(clientEntry, "console.log('vite production host test');\n");
+    await writeFile(join(root, "public", "favicon.svg"), "<svg>production</svg>\n");
+    await writeFile(join(root, "public", ".well-known", "security"), "contact=production\n");
+    await writeFile(
+      shellPath,
+      '<html><body><div id="root"></div><script type="module" src="/client.js"></script></body></html>',
+    );
+
+    const server = await serveBunProgram<TestMessage, TestProjection, TestTrace>({
+      runtime: createFanoutRuntime(),
+      rootDir: root,
+      clientEntry,
+      shellPath,
+      outdir: join(root, "dist"),
+      port: 0,
+      client: {
+        kind: "vite",
+        root,
+        reactCompiler: false,
+      },
+    });
+
+    try {
+      const htmlResponse = await fetch(`http://localhost:${server.port}/`);
+      const html = await htmlResponse.text();
+      const scriptPath = html.match(/<script type="module" src="([^"]+)"/)?.[1];
+
+      if (!scriptPath) {
+        throw new Error("Expected production HTML to include a Vite script");
+      }
+
+      const scriptResponse = await fetch(`http://localhost:${server.port}${scriptPath}`);
+      const faviconResponse = await fetch(`http://localhost:${server.port}/favicon.svg`);
+      const wellKnownResponse = await fetch(`http://localhost:${server.port}/.well-known/security`);
+      const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
+
+      expect(scriptPath).toMatch(/^\/assets\//);
+      expect(await scriptResponse.text()).toContain("vite production host test");
+      expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
+      expect(await faviconResponse.text()).toContain("<svg>production</svg>");
+      expect(await wellKnownResponse.text()).toContain("contact=production");
+      expect(traversalResponse.status).not.toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 function createFanoutRuntime() {

@@ -12,7 +12,7 @@ import {
   type ConnectionState,
   type ProgramStreamClient,
 } from "./program-stream";
-
+import { applyRegionValuePatchAutomatically } from "./projection-patch";
 export type ProgramStreamReactOptions<TProjection, TTrace> = {
   route: string;
   params: Record<string, string>;
@@ -157,17 +157,7 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
           }
         },
         onPatch(envelope) {
-          setCursor(envelope.cursor);
           setLastPatch(envelope);
-
-          if (!patchProjection) {
-            setLastError({
-              type: "error",
-              viewId: envelope.viewId,
-              message: "No projection patch applier configured",
-            });
-            return;
-          }
 
           const confirmed = confirmedProjectionRef.current;
 
@@ -183,7 +173,17 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
           let next: TProjection;
 
           try {
-            next = patchProjection(confirmed, envelope);
+            if (!patchProjection) {
+              if (envelope.projectionManifestVersion !== undefined) {
+                throw new Error(
+                  `Projection patch requires manifest version ${envelope.projectionManifestVersion}, but no applyPatch option is configured`,
+                );
+              }
+
+              next = applyRegionValuePatchAutomatically(confirmed, envelope);
+            } else {
+              next = patchProjection(confirmed, envelope);
+            }
           } catch (error) {
             setLastError({
               type: "error",
@@ -193,6 +193,7 @@ export function useProgramStream<TInput, TProjection, TTrace extends { traceId: 
             return;
           }
 
+          setCursor(envelope.cursor);
           dropProjectionSettledOptimism();
           publishProjection(next);
 
