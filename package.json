@@ -3,6 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./trace": "./src/trace.ts",
+    "./resource": "./src/resource.ts",
+    "./store": "./src/store.ts",
+    "./stream": "./src/stream.ts",
+    "./patch": "./src/patch.ts",
+    "./react": "./src/react.ts",
+    "./runtime": "./src/runtime.ts",
+    "./bun": "./src/bun.ts",
+    "./effect": "./src/effect.ts"
+  },
   "scripts": {
     "dev": "bun --hot src/server.ts",
     "test": "bun test",

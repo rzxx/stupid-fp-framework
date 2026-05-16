@@ -4,7 +4,8 @@ import {
   useProgramStreamState,
   type ProgramStreamReactOptions,
 } from "../../../adapters/react";
-import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
+import type { ProgramStreamBootstrap } from "../../../stream";
+import type { TraceSnapshot } from "../../../trace";
 import type { ApprovalClientInput, ApprovalProjection } from "../types";
 
 export function ApprovalApp(props: {

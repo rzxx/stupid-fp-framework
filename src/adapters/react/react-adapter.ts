@@ -6,7 +6,7 @@ import type {
   ProgramStreamBootstrap,
   ProjectionPatchEnvelope,
   ResumeResult,
-} from "../../framework";
+} from "../../framework/stream";
 import {
   connectProgramStream,
   type ConnectionState,

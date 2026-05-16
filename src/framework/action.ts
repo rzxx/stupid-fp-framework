@@ -45,6 +45,10 @@ export function actionFailure(message: string, detail?: JsonRecord): ActionFailu
   return { message, detail };
 }
 
+export function rejectAction(message: string, detail?: JsonRecord): never {
+  throw actionFailure(message, detail);
+}
+
 export function defineAction<
   TInput extends { type: string },
   TResult extends JsonValue | void = void,
@@ -58,6 +62,7 @@ export function defineAction<
 }
 
 export const Action = {
+  reject: rejectAction,
   define<TType extends string>(type: TType) {
     return {
       input<TInput extends { type: TType }>(schema: FrameworkSchema<TInput>) {
@@ -67,11 +72,38 @@ export const Action = {
           ): ActionDefinition<R, TInput, TResult> {
             return defineAction(type, acceptsSchema(schema), run);
           },
+          runAsync<TResult extends JsonValue | void = void>(
+            run: (input: TInput, context: ActionContext) => TResult | Promise<TResult>,
+          ): ActionDefinition<never, TInput, TResult> {
+            return defineAction(type, acceptsSchema(schema), (input, context) =>
+              Effect.tryPromise({
+                try: () => Promise.resolve(run(input, context)),
+                catch: normalizeAsyncActionFailure,
+              }),
+            );
+          },
         };
       },
     };
   },
 };
+
+function normalizeAsyncActionFailure(error: unknown): ActionFailure {
+  if (isActionFailure(error)) {
+    return error;
+  }
+
+  return actionFailure(error instanceof Error ? error.message : "Action failed");
+}
+
+function isActionFailure(value: unknown): value is ActionFailure {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "message" in value &&
+    typeof value.message === "string"
+  );
+}
 
 export async function executeAction<R, TInput extends { type: string }>(
   action: ActionDefinition<R, TInput>,

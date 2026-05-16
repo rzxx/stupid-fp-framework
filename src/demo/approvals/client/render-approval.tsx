@@ -1,5 +1,6 @@
 import { renderToString } from "react-dom/server";
-import type { ProgramStreamBootstrap, TraceSnapshot } from "../../../framework";
+import type { ProgramStreamBootstrap } from "../../../stream";
+import type { TraceSnapshot } from "../../../trace";
 import type { ApprovalProjection } from "../types";
 import { ApprovalApp } from "./approval-app";
 

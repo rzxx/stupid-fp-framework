@@ -1,24 +1,12 @@
 import type { Effect } from "./effect";
 import type { JsonRecord, JsonValue } from "./json";
+import type { ProjectionRegionSnapshot } from "./observation";
 import type { ResourceFailure, ResourceGraph } from "./resource";
 import { defineRoute, type RouteDefinition } from "./route";
 import type { ViewContext } from "./view";
 import type { TraceReader } from "./trace";
 
-export type ProjectionRegionSnapshot = {
-  id: string;
-  value?: JsonValue;
-  resources: {
-    type: string;
-    id: string;
-    label: string;
-    scope?: {
-      kind: string;
-      id: string;
-      label: string;
-    };
-  }[];
-};
+export type { ProjectionRegionSnapshot } from "./observation";
 
 export type ProjectionPath = readonly (string | number)[];
 

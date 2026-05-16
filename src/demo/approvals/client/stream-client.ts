@@ -5,7 +5,7 @@ import type {
   ProjectionEnvelope,
   ResumeResult,
   TraceEnvelope,
-} from "../../../framework";
+} from "../../../stream";
 import type { ApprovalClientInput, ApprovalProjection } from "../types";
 import { connectProgramStream, type ConnectionState } from "../../../adapters/react";
 

@@ -3,8 +3,7 @@ import { dirname } from "node:path";
 import type { ViewCheckpoint } from "./view";
 import type { ServerEnvelope } from "./stream";
 import type { TraceSnapshot } from "./trace";
-import type { ProjectionRegionSnapshot } from "./projection";
-import type { SerializedResourceKey } from "./resource";
+import type { ProjectionRegionSnapshot, SerializedResourceKey } from "./observation";
 
 export const RUNTIME_STORE_PROTOCOL_VERSION = 1;
 

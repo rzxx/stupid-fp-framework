@@ -1,10 +1,10 @@
+import type { ProjectionPatchEnvelope } from "../../framework/stream";
 import type {
-  JsonValue,
-  ProjectionPatchEnvelope,
   ProjectionPatchManifest,
   ProjectionPath,
   ProjectionRegionPatchStrategy,
-} from "../../framework";
+} from "../../framework/projection";
+import type { JsonValue } from "../../framework/json";
 
 export type RegionValuePatchHandlers<TProjection> = Record<
   string,
@@ -17,7 +17,7 @@ export type {
   ProjectionPatchManifest,
   ProjectionPath,
   ProjectionRegionPatchStrategy,
-} from "../../framework";
+} from "../../framework/projection";
 
 export function applyRegionValuePatch<TProjection>(
   projection: TProjection,

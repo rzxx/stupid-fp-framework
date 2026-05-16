@@ -6,7 +6,7 @@ import {
   type InvocationContextValue,
 } from "./invocation";
 import type { JsonValue } from "./json";
-import type { ProjectionRegionSnapshot } from "./projection";
+import type { ProjectionRegionSnapshot, SerializedResourceKey } from "./observation";
 import type { ResourceHooks } from "./plugin";
 
 export type ResourceKey<TValue = unknown> = {
@@ -68,20 +68,7 @@ export type ResourceSnapshot<TValue = unknown> = {
   readonly value: TValue;
 };
 
-export type SerializedResourceKey = {
-  type: string;
-  id: string;
-  label: string;
-  scope?: {
-    kind: string;
-    id: string;
-    label: string;
-  };
-};
-
-export type ResourceObservation = {
-  key: SerializedResourceKey;
-};
+export type { ResourceObservation, SerializedResourceKey } from "./observation";
 
 export type ResourceObservationResult<TValue> = {
   value: TValue;
@@ -185,6 +172,31 @@ class ResourceBuilder<TValue> {
         },
         load: (key) => load(key.params as TParams, key as ResourceKey<TValue>),
       }),
+      loadAsync: (
+        load: (params: TParams, key: ResourceKey<TValue>) => TValue | Promise<TValue>,
+      ): ResourceDeclaration<never, TParams, TValue> => ({
+        type: this.#type,
+        scope: this.#scope,
+        key: (params) => {
+          const id = options.id(params);
+          return resourceKey(
+            this.#type,
+            id,
+            options.label?.(params) ?? `${this.#type}(${id})`,
+            params,
+          );
+        },
+        load: (key) =>
+          Effect.tryPromise({
+            try: () => Promise.resolve(load(key.params as TParams, key as ResourceKey<TValue>)),
+            catch: (error) =>
+              resourceFailure(
+                this.#type,
+                error instanceof Error ? error.message : "Resource loader failed",
+                key.id,
+              ),
+          }),
+      }),
     };
   }
 }
@@ -280,6 +292,10 @@ export class ResourceGraph<R> {
     );
   }
 
+  async readAsync<TValue>(key: ResourceKey<TValue>): Promise<TValue> {
+    return Effect.runPromise(this.read(key) as Effect.Effect<TValue, never, never>);
+  }
+
   invalidate(keys: readonly ResourceKey[]): void {
     for (const key of keys) {
       const baseId = `${resourceKeyId(key)}:`;
@@ -344,6 +360,30 @@ export class ResourceGraph<R> {
         observer.regionId = previous;
       }),
     );
+  }
+
+  async regionAsync<TValue>(id: string, read: () => Promise<TValue> | TValue): Promise<TValue> {
+    const observer = this.#observerStorage.getStore();
+
+    if (!observer) {
+      return read();
+    }
+
+    const previous = observer.regionId;
+    observer.regionId = id;
+
+    try {
+      const value = await read();
+      const region = this.#ensureRegion(observer, id);
+
+      if (isJsonValue(value)) {
+        region.value = value;
+      }
+
+      return value;
+    } finally {
+      observer.regionId = previous;
+    }
   }
 
   #recordObservation(key: ResourceKey): void {

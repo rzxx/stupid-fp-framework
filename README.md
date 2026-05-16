@@ -198,6 +198,45 @@ bun check         # typecheck + lint + format check
 
 ---
 
+## adoption ladder
+
+You do not have to adopt the whole server-program model first. The package exposes opt-in
+entrypoints for smaller experiments:
+
+```ts
+import { TraceStore } from "stupid-fp-framework/trace";
+import { Resource, ResourceGraph } from "stupid-fp-framework/resource";
+import { MemoryRuntimeStore } from "stupid-fp-framework/store";
+import { Schema } from "stupid-fp-framework/effect";
+```
+
+The first lightweight path is:
+
+1. Use `TraceStore` to record browser-safe causal events.
+2. Use `ResourceGraph` to track which named regions read which resources.
+3. Use runtime stores to experiment with checkpoints, cursors, envelopes, and observation indexes.
+4. Add stream/patch, React, Bun, Effect, or the full runtime only when you need them.
+
+Promise-first APIs are available for users who do not want to author Effect code:
+
+```ts
+const Counter = Resource.define("Counter")
+  .value<number>()
+  .key<{ id: string }>(Schema.Struct({ id: Schema.String }), {
+    id: (params) => params.id,
+  })
+  .loadAsync(async (params) => params.id.length);
+
+const graph = new ResourceGraph();
+graph.register(Counter);
+
+const observed = await graph.observe(() =>
+  graph.regionAsync("counter", () => graph.readAsync(Counter.key({ id: "main" }))),
+);
+```
+
+---
+
 ## project status
 
 This is v0.0.0. It's a working prototype that passes its contract, integration, and acceptance tests. But it's:
@@ -225,6 +264,7 @@ The best way to use this right now is as a **learning tool** and a **conversatio
 - **[Framework State Review 6](docs/framework-state-review-6.md)** — patch, routing, dev server, and API direction
 - **[Stage 9 Record](docs/stage-9-record.md)** — implementation record for patch manifests, navigation, Bun assets, and builder APIs
 - **[Framework State Review 7](docs/framework-state-review-7.md)** — Stage 10 semantic hardening for state ownership, resource scopes, and trace-first positioning
+- **[Framework State Review 8](docs/framework-state-review-8.md)** — modular adoption direction for subpath exports and Promise-first APIs
 
 ---
 

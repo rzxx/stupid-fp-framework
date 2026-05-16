@@ -1,5 +1,5 @@
 import type { Effect, Layer } from "./effect";
-import type { SerializedResourceKey } from "./resource";
+import type { SerializedResourceKey } from "./observation";
 import type { ViewContext } from "./view";
 import type { TraceEvent, TraceSnapshot } from "./trace";
 
