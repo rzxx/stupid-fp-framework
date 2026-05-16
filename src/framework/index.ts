@@ -1,5 +1,4 @@
 export * from "./action";
-export * from "./bun-host";
 export * from "./effect";
 export * from "./json";
 export * from "./invocation";

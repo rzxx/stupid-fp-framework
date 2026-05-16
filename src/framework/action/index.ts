@@ -82,16 +82,6 @@ export const Action = {
           ): ActionDefinition<R, TInput, TResult> {
             return defineAction(type, acceptsSchema(schema), run);
           },
-          runAsync<TResult extends JsonValue | void = void>(
-            run: (input: TInput, context: ActionContext) => TResult | Promise<TResult>,
-          ): ActionDefinition<never, TInput, TResult> {
-            return defineAction(type, acceptsSchema(schema), (input, context) =>
-              Effect.tryPromise({
-                try: () => Promise.resolve(run(input, context)),
-                catch: normalizeAsyncActionFailure,
-              }),
-            );
-          },
         };
       },
     };

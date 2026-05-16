@@ -1,1 +1,1 @@
-export * from "./framework/bun-host";
+export * from "./adapters/bun";
