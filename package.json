@@ -12,11 +12,12 @@
     "./patch": "./src/patch.ts",
     "./react": "./src/react.ts",
     "./runtime": "./src/runtime.ts",
-    "./bun": "./src/bun.ts",
+    "./vite": "./src/vite.ts",
     "./effect": "./src/effect.ts"
   },
   "scripts": {
-    "dev": "bun --hot src/server.ts",
+    "dev": "bun src/server.ts",
+    "build": "bun src/build.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",

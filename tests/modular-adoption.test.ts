@@ -9,7 +9,7 @@ import type { ProjectionPatchEnvelope, ServerEnvelope } from "stupid-fp-framewor
 import { TraceStore, type TraceSnapshot } from "stupid-fp-framework/trace";
 import { applyRegionValuePatchAutomatically } from "stupid-fp-framework/patch";
 import type { ProgramStreamReactOptions } from "stupid-fp-framework/react";
-import { serveBunProgram } from "stupid-fp-framework/bun";
+import { serveViteProgram } from "stupid-fp-framework/vite";
 
 describe("modular adoption surface", () => {
   test("public subpath exports are importable without the full framework barrel", () => {
@@ -25,7 +25,7 @@ describe("modular adoption surface", () => {
       count: 1,
     });
     expect(reactOptions).toBeNull();
-    expect(typeof serveBunProgram).toBe("function");
+    expect(typeof serveViteProgram).toBe("function");
   });
 
   test("trace can be used standalone with browser-safe snapshots", () => {
