@@ -46,6 +46,16 @@ You write the program once. The runtime handles invalidation, projection, stream
 
 ---
 
+## where this fits
+
+**Sweet spot:** workflow-heavy tools where the UI is a live projection of server state. Approval flows, incident consoles, operations dashboards, moderation queues, admin panels with live actions. Apps that need permissions, audit trails, long-running work, and the ability to answer "why did this change?"
+
+**Not the fit:** marketing sites, content pages, simple CRUD, or apps where request/response plus client caching is enough. If your UI doesn't react to server-side workflow changes, this is overkill.
+
+**How it differs:** instead of designing endpoints, managing client caches, and wiring invalidation by hand, you write one server program. The runtime tracks what each view reads, pushes patches when resources change, and records causal traces for every update. React stays your rendering layer — components, ecosystem, and local state all work as usual.
+
+---
+
 ## the idea in 30 seconds
 
 You define three things:
