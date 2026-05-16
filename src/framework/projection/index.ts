@@ -1,0 +1,200 @@
+import type { Effect } from "../effect";
+import type { JsonRecord, JsonValue } from "../json";
+import type { ProjectionRegionSnapshot } from "../observation";
+import type { ResourceFailure, ResourceGraph, ResourceKey } from "../resource";
+import { defineRoute, type RouteDefinition } from "../route";
+import type { ViewContext } from "../view";
+import type { TraceReader } from "../trace";
+
+export type { ProjectionRegionSnapshot } from "../observation";
+
+export type ProjectionPath = readonly (string | number)[];
+
+export type ProjectionRegionPatchStrategy<TProjection> =
+  | {
+      kind: "replace-region";
+    }
+  | {
+      kind: "merge-fields";
+    }
+  | {
+      kind: "replace-at-path";
+      path: ProjectionPath;
+    }
+  | {
+      kind: "replace-fields";
+      fields: {
+        from: ProjectionPath;
+        to: ProjectionPath;
+      }[];
+    }
+  | {
+      kind: "custom";
+      apply: (projection: TProjection, value: JsonValue) => TProjection;
+    };
+
+export type ProjectionPatchManifest<TProjection> = {
+  projectionVersion: number;
+  regions: Record<string, ProjectionRegionPatchStrategy<TProjection>>;
+};
+
+export type ProjectionRegionDefinition<TProjection> = ProjectionRegionPatchStrategy<TProjection>;
+
+export type ProjectionFailure = {
+  type: "projection-error";
+  message: string;
+};
+
+export type ProjectionContext<R> = {
+  resources: ResourceGraph<R>;
+  traces: TraceReader;
+  read: <TValue>(key: ResourceKey<TValue>) => Effect.Effect<TValue, ResourceFailure, R>;
+  region: <TValue, E>(
+    id: string,
+    read: () => Effect.Effect<TValue, E, R>,
+  ) => Effect.Effect<TValue, E, R>;
+};
+
+export type AsyncProjectionContext = {
+  traces: TraceReader;
+  read: <TValue>(key: ResourceKey<TValue>) => Promise<TValue>;
+  region: <TValue>(id: string, read: () => Promise<TValue> | TValue) => Promise<TValue>;
+};
+
+export type LayoutDefinition = {
+  id: string;
+};
+
+export type ScreenDefinition<R, TUIState, TProjection> = {
+  route: string | RouteDefinition;
+  layout?: LayoutDefinition;
+  patchManifest?: ProjectionPatchManifest<TProjection>;
+  project?: (
+    view: ViewContext<TUIState>,
+    context: ProjectionContext<R>,
+  ) => Effect.Effect<TProjection, ProjectionFailure | ResourceFailure, R>;
+  projectAsync?: (
+    view: ViewContext<TUIState>,
+    context: AsyncProjectionContext,
+  ) => Promise<TProjection> | TProjection;
+};
+
+export const Layout = {
+  define(id: string): LayoutDefinition {
+    return { id };
+  },
+};
+
+export const Region = {
+  replace<TProjection = unknown>(): ProjectionRegionDefinition<TProjection> {
+    return { kind: "replace-region" };
+  },
+  merge<TProjection = unknown>(): ProjectionRegionDefinition<TProjection> {
+    return { kind: "merge-fields" };
+  },
+  custom<TProjection>(
+    apply: (projection: TProjection, value: JsonValue) => TProjection,
+  ): ProjectionRegionDefinition<TProjection> {
+    return { kind: "custom", apply };
+  },
+  replaceAt<TProjection = unknown>(path: ProjectionPath): ProjectionRegionDefinition<TProjection> {
+    return { kind: "replace-at-path", path };
+  },
+};
+
+export const Screen = {
+  define(id: string) {
+    return new ScreenBuilder(id);
+  },
+};
+
+class ScreenBuilder<R = never, TUIState = never, TProjection = never> {
+  readonly #id: string;
+  #route: string | RouteDefinition | null = null;
+  #layout: LayoutDefinition | undefined;
+  #patchManifest: ProjectionPatchManifest<TProjection> | undefined;
+
+  constructor(id: string) {
+    this.#id = id;
+  }
+
+  route<TParams extends Record<string, string>>(
+    pattern: string,
+    options: { params: RouteDefinition<TParams>["params"] },
+  ): ScreenBuilder<R, TUIState, TProjection> {
+    this.#route = defineRoute(pattern, { id: this.#id, params: options.params });
+    return this;
+  }
+
+  routeDefinition(route: string | RouteDefinition): ScreenBuilder<R, TUIState, TProjection> {
+    this.#route = route;
+    return this;
+  }
+
+  layout(layout: LayoutDefinition): ScreenBuilder<R, TUIState, TProjection> {
+    this.#layout = layout;
+    return this;
+  }
+
+  regions<TNextProjection>(
+    regions: Record<string, ProjectionRegionDefinition<TNextProjection>>,
+    options?: { projectionVersion?: number },
+  ): ScreenBuilder<R, TUIState, TNextProjection> {
+    this.#patchManifest = {
+      projectionVersion: options?.projectionVersion ?? 1,
+      regions,
+    } as ProjectionPatchManifest<TProjection>;
+    return this as unknown as ScreenBuilder<R, TUIState, TNextProjection>;
+  }
+
+  patchManifest<TNextProjection>(
+    manifest: ProjectionPatchManifest<TNextProjection>,
+  ): ScreenBuilder<R, TUIState, TNextProjection> {
+    this.#patchManifest = manifest as unknown as ProjectionPatchManifest<TProjection>;
+    return this as unknown as ScreenBuilder<R, TUIState, TNextProjection>;
+  }
+
+  project<TNextUIState, TNextProjection>(
+    project: (
+      view: ViewContext<TNextUIState>,
+      context: AsyncProjectionContext,
+    ) => Promise<TNextProjection> | TNextProjection,
+  ): ScreenDefinition<never, TNextUIState, TNextProjection> {
+    if (!this.#route) {
+      throw new Error(`Screen ${this.#id} must define a route before project()`);
+    }
+
+    return {
+      route: this.#route,
+      layout: this.#layout,
+      patchManifest: this.#patchManifest as unknown as ProjectionPatchManifest<TNextProjection>,
+      projectAsync: project,
+    };
+  }
+
+  projectEffect<TR, TNextUIState, TNextProjection>(
+    project: (
+      view: ViewContext<TNextUIState>,
+      context: ProjectionContext<TR>,
+    ) => Effect.Effect<TNextProjection, ProjectionFailure | ResourceFailure, TR>,
+  ): ScreenDefinition<TR, TNextUIState, TNextProjection> {
+    if (!this.#route) {
+      throw new Error(`Screen ${this.#id} must define a route before project()`);
+    }
+
+    return {
+      route: this.#route,
+      layout: this.#layout,
+      patchManifest: this.#patchManifest as unknown as ProjectionPatchManifest<TNextProjection>,
+      project,
+    };
+  }
+}
+
+export type ProjectionEnvelopeData<TProjection> = {
+  projectionVersion: number;
+  projection: TProjection;
+  regions: ProjectionRegionSnapshot[];
+};
+
+export type ProjectionMeta = JsonRecord;
