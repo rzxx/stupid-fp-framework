@@ -582,7 +582,9 @@ function localOrigin(server: ViteDevServer): string {
 
   if (address && typeof address === "object") {
     const host =
-      address.address === "::" || address.address === "0.0.0.0"
+      address.address === "::" ||
+      address.address === "::1" ||
+      address.address === "0.0.0.0"
         ? "localhost"
         : formatHost(address.address);
     return `http://${host}:${address.port}`;
@@ -738,9 +740,14 @@ function hasUnsafePathSegment(pathname: string): boolean {
 }
 
 function prefixViteDevAssets(html: string, origin: string): string {
-  return html.replaceAll(
+  const withAttrs = html.replaceAll(
     /(src|href)="\/(@vite|@react-refresh|@id|@fs|node_modules|src|demo|client)/g,
     `$1="${origin}/$2`,
+  );
+
+  return withAttrs.replaceAll(
+    /((?:import|from)\s+["'])\/(@vite|@react-refresh|@id|@fs|node_modules|src|demo|client)/g,
+    `$1${origin}/$2`,
   );
 }
 
