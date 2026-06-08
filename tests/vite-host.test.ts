@@ -126,7 +126,9 @@ describe("Vite host stream delivery", () => {
   });
 
   test("serves production manifest output and public assets after Vite build", async () => {
-    const root = await createHostFixture();
+    const root = await createHostFixture({
+      configSource: (fixtureRoot) => viteConfigSource(fixtureRoot, { htmlTransform: true }),
+    });
     await mkdir(join(root, "public", ".well-known"), { recursive: true });
     await writeFile(join(root, "public", "favicon.svg"), "<svg>production</svg>\n");
     await writeFile(join(root, "public", ".well-known", "security"), "contact=production\n");
@@ -157,12 +159,40 @@ describe("Vite host stream delivery", () => {
       const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
 
       expect(scriptPath).toMatch(/^\/assets\//);
+      expect(html).toContain('data-transformed="true"');
+      expect(html).not.toContain("/@id/virtual:stupid-fp/client");
       expect(await scriptResponse.text()).toContain("vite host test");
       expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
       expect(await faviconResponse.text()).toContain("<svg>production</svg>");
       expect(await wellKnownResponse.text()).toContain("contact=production");
       expect(manifestResponse.status).not.toBe(200);
       expect(traversalResponse.status).not.toBe(200);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("reuses the production host across HTTP requests", async () => {
+    const root = await createHostFixture({
+      serverSource: statefulServerEntrySource(),
+    });
+    await buildViteProgram({
+      configFile: join(root, "vite.config.ts"),
+      mode: "production",
+    });
+
+    const server = await serveViteProgram({
+      configFile: join(root, "vite.config.ts"),
+      port: 0,
+      mode: "production",
+    });
+
+    try {
+      const first = await fetch(`http://localhost:${server.port}/test?id=stateful`);
+      const second = await fetch(`http://localhost:${server.port}/test?id=stateful`);
+
+      expect(await first.text()).toContain('<main data-view="view-stateful">1</main>');
+      expect(await second.text()).toContain('<main data-view="view-stateful">2</main>');
     } finally {
       server.stop(true);
     }
@@ -230,13 +260,23 @@ async function createHostFixture(options: HostFixtureOptions = {}): Promise<stri
   return root;
 }
 
-function viteConfigSource(root: string, options?: { duplicatePlugin?: boolean }): string {
+function viteConfigSource(
+  root: string,
+  options?: { duplicatePlugin?: boolean; htmlTransform?: boolean },
+): string {
   const plugin = `
     stupidFpVite({
       template: "index.html",
       client: "client.ts",
       server: "server.ts",
     })`;
+  const htmlTransformPlugin = `
+    {
+      name: "test-html-transform",
+      transformIndexHtml(html) {
+        return html.replace("<body>", '<body data-transformed="true">');
+      },
+    }`;
 
   return `
 import { stupidFpVite } from ${JSON.stringify(relativeImport(root, "src/vite.ts"))};
@@ -248,6 +288,7 @@ export default {
   },
   plugins: [
     ${plugin},
+    ${options?.htmlTransform ? htmlTransformPlugin : ""}
     ${options?.duplicatePlugin ? plugin : ""}
   ],
 };
@@ -330,6 +371,54 @@ function createFanoutRuntime() {
           },
         ],
       };
+    },
+  };
+}
+`;
+}
+
+function statefulServerEntrySource(): string {
+  return `
+export function createProgramHost() {
+  let connects = 0;
+
+  return {
+    runtime: {
+      async connect(envelope) {
+        connects += 1;
+        const viewId = \`view-\${envelope.params.id}\`;
+
+        return {
+          envelopes: [
+            {
+              type: "connected",
+              viewId,
+              cursor: \`\${viewId}-cursor-1\`,
+              resumed: false,
+              resume: { status: "fresh" },
+            },
+            {
+              type: "projection:update",
+              viewId,
+              cursor: \`\${viewId}-cursor-2\`,
+              projectionVersion: connects,
+              projection: { viewId, value: connects },
+              regions: [],
+            },
+          ],
+        };
+      },
+      async receive() {
+        return { envelopes: [] };
+      },
+    },
+    resolve(request) {
+      const url = new URL(request.url);
+      if (url.pathname !== "/test") return undefined;
+      return { route: "/test", params: { id: url.searchParams.get("id") ?? "initial" } };
+    },
+    render(bootstrap) {
+      return \`<main data-view="\${bootstrap.viewId}">\${bootstrap.projection.value}</main>\`;
     },
   };
 }

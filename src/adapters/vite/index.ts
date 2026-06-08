@@ -131,7 +131,11 @@ export function stupidFpVite(options: StupidFpViteOptions): PluginOption[] {
 
       return null;
     },
-    transformIndexHtml() {
+    transformIndexHtml(_html, context) {
+      if (!context.server) {
+        return [];
+      }
+
       return [
         {
           tag: "script",
@@ -179,7 +183,7 @@ export async function buildViteProgram(
         emptyOutDir: true,
         manifest: true,
         rollupOptions: {
-          input: app.clientVirtualId,
+          input: [app.template, app.clientVirtualId],
         },
       },
     });
@@ -434,6 +438,8 @@ async function prepareProductionProgram<TInput, TProjection, TTrace>(
   const manifestPath = join(clientOutDir, ".vite", "manifest.json");
   const manifest = (await Bun.file(manifestPath).json()) as Record<string, ViteManifestEntry>;
   const manifestEntry = resolveManifestEntry(manifest);
+  const templatePath = resolveProductionTemplatePath(clientOutDir, resolved.app, manifest);
+  let productionHostPromise: Promise<ViteProgramHost<TInput, TProjection, TTrace>> | null = null;
 
   if (!manifestEntry) {
     throw new Error("Vite client build did not produce a manifest entry");
@@ -441,15 +447,16 @@ async function prepareProductionProgram<TInput, TProjection, TTrace>(
 
   const prepared: PreparedProgram<TInput, TProjection, TTrace> = {
     async loadHost() {
-      const mod = (await import(pathToFileURL(serverEntry).href)) as ViteProgramServerEntry<
-        TInput,
-        TProjection,
-        TTrace
-      >;
-      return createProgramHostFromModule(mod, "production");
+      productionHostPromise ??= import(pathToFileURL(serverEntry).href).then((mod) =>
+        createProgramHostFromModule(
+          mod as ViteProgramServerEntry<TInput, TProjection, TTrace>,
+          "production",
+        ),
+      );
+      return productionHostPromise;
     },
     async loadTemplate() {
-      return Bun.file(resolved.app.template).text();
+      return Bun.file(templatePath).text();
     },
     async transformHtml(_request, html) {
       return injectViteProductionAssets(html, manifest, manifestEntry);
@@ -644,6 +651,26 @@ function resolveManifestEntry(
   }
 
   return null;
+}
+
+function resolveProductionTemplatePath(
+  clientOutDir: string,
+  app: StupidFpViteMetadata,
+  manifest: Record<string, ViteManifestEntry>,
+): string {
+  const relativeTemplate = relative(app.root, app.template);
+
+  if (!relativeTemplate.startsWith("..") && !isAbsolute(relativeTemplate)) {
+    return join(clientOutDir, relativeTemplate);
+  }
+
+  const manifestTemplate = Object.keys(manifest).find((key) => key.endsWith(".html"));
+
+  if (!manifestTemplate) {
+    throw new Error("Vite client build did not produce a template HTML entry");
+  }
+
+  return join(clientOutDir, manifestTemplate);
 }
 
 async function proxyViteAsset(origin: string, request: Request): Promise<Response | null> {
@@ -892,7 +919,14 @@ class SocketDelivery<TProjection, TTrace> {
       return;
     }
 
-    this.#viewsockets.get(viewId)?.delete(socket);
+    const sockets = this.#viewsockets.get(viewId);
+
+    sockets?.delete(socket);
+
+    if (sockets?.size === 0) {
+      this.#viewsockets.delete(viewId);
+    }
+
     this.#socketview.delete(socket);
   }
 
