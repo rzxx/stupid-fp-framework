@@ -408,11 +408,7 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
 
       return proxyViteAsset(origin, request);
     },
-    printUrls() {
-      if (Bun.env.NODE_ENV !== "test") {
-        server.printUrls();
-      }
-    },
+    printUrls() {},
     async close() {
       await runner.close();
       await server.close();

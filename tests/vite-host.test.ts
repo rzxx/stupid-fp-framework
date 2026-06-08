@@ -226,6 +226,20 @@ describe("Vite host stream delivery", () => {
     ).rejects.toThrow("Vite config includes multiple stupidFpVite() plugins");
   });
 
+  test("generates valid config when html transforms and duplicate plugins are combined", async () => {
+    const root = await createHostFixture({
+      configSource: (fixtureRoot) =>
+        viteConfigSource(fixtureRoot, { duplicatePlugin: true, htmlTransform: true }),
+    });
+
+    await expect(
+      serveViteProgram({
+        configFile: join(root, "vite.config.ts"),
+        port: 0,
+      }),
+    ).rejects.toThrow("Vite config includes multiple stupidFpVite() plugins");
+  });
+
   test("fails clearly when the server entry does not export createProgramHost", async () => {
     const root = await createHostFixture({
       serverSource: "export const notAHost = true;\n",
@@ -277,6 +291,11 @@ function viteConfigSource(
         return html.replace("<body>", '<body data-transformed="true">');
       },
     }`;
+  const plugins = [
+    plugin,
+    ...(options?.htmlTransform ? [htmlTransformPlugin] : []),
+    ...(options?.duplicatePlugin ? [plugin] : []),
+  ].join(",");
 
   return `
 import { stupidFpVite } from ${JSON.stringify(relativeImport(root, "src/vite.ts"))};
@@ -287,9 +306,7 @@ export default {
     outDir: ${JSON.stringify(join(root, "dist").replaceAll("\\", "/"))},
   },
   plugins: [
-    ${plugin},
-    ${options?.htmlTransform ? htmlTransformPlugin : ""}
-    ${options?.duplicatePlugin ? plugin : ""}
+    ${plugins}
   ],
 };
 `;
