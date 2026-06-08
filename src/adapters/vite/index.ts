@@ -64,6 +64,7 @@ export type ViteProgramServerContext = {
 
 export type ViteProgramOptions = {
   configFile?: string;
+  hostname?: string;
   port?: number;
   mode?: "development" | "production";
 };
@@ -228,6 +229,7 @@ export async function serveViteProgram<TInput, TProjection, TTrace>(
 
   try {
     server = Bun.serve<BunSocketData>({
+      hostname: options.hostname,
       port: options.port,
       async fetch(request, bunServer) {
         const url = new URL(request.url);
@@ -576,7 +578,27 @@ function rootImportPath(root: string, file: string): string {
 }
 
 function localOrigin(server: ViteDevServer): string {
-  return server.resolvedUrls?.local[0]?.replace(/\/$/, "") ?? "http://localhost:5173";
+  const address = server.httpServer?.address();
+
+  if (address && typeof address === "object") {
+    const host =
+      address.address === "::" || address.address === "0.0.0.0"
+        ? "localhost"
+        : formatHost(address.address);
+    return `http://${host}:${address.port}`;
+  }
+
+  const localUrl = server.resolvedUrls?.local[0];
+
+  if (localUrl) {
+    return localUrl.replace(/\/$/, "");
+  }
+
+  return "http://localhost:5173";
+}
+
+function formatHost(host: string): string {
+  return host.includes(":") ? `[${host}]` : host;
 }
 
 function bootstrapFromEnvelopes<TProjection, TTrace>(

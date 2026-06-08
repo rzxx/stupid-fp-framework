@@ -13,6 +13,12 @@ import type { ApprovalClientInput, ApprovalProjection } from "../types";
 const applyApprovalProjectionPatch = createProjectionPatchApplier<ApprovalProjection>(
   approvalProjectionPatchManifest,
 );
+const timeFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZone: "UTC",
+});
 
 export function ApprovalApp(props: {
   bootstrap?: ProgramStreamBootstrap<ApprovalProjection, TraceSnapshot>;
@@ -370,9 +376,5 @@ function TracePanel(props: {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
+  return timeFormatter.format(new Date(value));
 }
