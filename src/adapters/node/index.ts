@@ -69,6 +69,7 @@ export type NodeProgramServerOptions<TInput, TProjection, TTrace> = {
         | Promise<ProgramServerEntry<TInput, TProjection, TTrace>>);
   mode?: "development" | "production";
   clientOutDir: string | URL;
+  clientEntry?: string;
   templatePath: string | URL;
   manifestPath: string | URL;
   env?: Record<string, string | undefined>;
@@ -81,6 +82,7 @@ export type NodeProgramListenOptions = {
 
 type ViteManifestEntry = {
   file: string;
+  src?: string;
   css?: string[];
   imports?: string[];
   isEntry?: boolean;
@@ -276,10 +278,14 @@ async function readProductionAssets<TInput, TProjection, TTrace>(
     string,
     ViteManifestEntry
   >;
-  const manifestEntry = resolveManifestEntry(manifest);
+  const manifestEntry = resolveManifestEntry(manifest, options.clientEntry);
 
   if (!manifestEntry) {
-    throw new Error("Vite client build did not produce a manifest entry");
+    throw new Error(
+      options.clientEntry
+        ? `Vite client build did not produce manifest entry ${options.clientEntry}`
+        : "Vite client build did not produce a manifest entry",
+    );
   }
 
   return {
@@ -292,7 +298,18 @@ async function readProductionAssets<TInput, TProjection, TTrace>(
 
 function resolveManifestEntry(
   manifest: Record<string, ViteManifestEntry>,
+  clientEntry: string | undefined,
 ): ViteManifestEntry | null {
+  if (clientEntry) {
+    return (
+      manifest[clientEntry] ??
+      Object.entries(manifest).find(
+        ([key, entry]) => key.endsWith(clientEntry) || entry.src?.endsWith(clientEntry),
+      )?.[1] ??
+      null
+    );
+  }
+
   const entries = Object.values(manifest).filter((entry) => entry.isEntry);
 
   if (entries.length === 1) {
@@ -374,9 +391,12 @@ function injectProductionAssets(html: string, assets: ProductionAssets): string 
   const modulepreloads = importedChunks
     .map((chunk) => `<link rel="modulepreload" href="/${chunk.file}" />`)
     .join("");
-  const tags = `${styles}${script}${modulepreloads}`;
+  const headTags = `${styles}${modulepreloads}`;
 
-  return html.includes("</body>") ? html.replace("</body>", `${tags}</body>`) : `${html}${tags}`;
+  return injectIntoHead(
+    html.includes("</body>") ? html.replace("</body>", `${script}</body>`) : `${html}${script}`,
+    headTags,
+  );
 }
 
 function collectViteImportedChunks(
@@ -406,6 +426,24 @@ function collectViteImportedChunks(
 
   visit(entry);
   return chunks;
+}
+
+function injectIntoHead(html: string, tags: string): string {
+  if (!tags) {
+    return html;
+  }
+
+  if (html.includes("</head>")) {
+    return html.replace("</head>", `${tags}</head>`);
+  }
+
+  const bodyMatch = html.match(/<body\b[^>]*>/);
+
+  if (bodyMatch?.[0]) {
+    return html.replace(bodyMatch[0], `${bodyMatch[0]}${tags}`);
+  }
+
+  return `${tags}${html}`;
 }
 
 function htmlResponse(html: string): Response {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -93,15 +93,19 @@ describe("Vite-native program host", () => {
       const response = await fetch(`http://localhost:${server.port}/test?id=initial`);
       const html = await response.text();
       const bootstrap = parseBootstrap(html);
+      const stylesheetPath = stylesheetHref(html);
 
       expect(response.headers.get("content-type")).toContain("text/html");
       expect(serverRenderedValue(html, "view-initial")).toBe("0");
+      expect(stylesheetPath).toBe("/client.css");
+      expect(html.indexOf(`href="${stylesheetPath}"`)).toBeLessThan(html.indexOf("<body"));
       expect(bootstrap).toMatchObject({
         viewId: "view-initial",
         projectionVersion: 1,
         projection: { viewId: "view-initial", value: 0 },
       });
       expect(html).toContain("/@vite/client");
+      await expectStylesheetServed(server.port, stylesheetPath, "host-test-css");
       await expectHtmlLoadsClientEntry(server.port, html);
     } finally {
       await server.close();
@@ -120,17 +124,45 @@ describe("Vite-native program host", () => {
       const htmlResponse = await fetch(`http://localhost:${server.port}/test`);
       const html = await htmlResponse.text();
       const clientResponse = await fetch(`http://localhost:${server.port}/client.ts`);
+      const stylesheetPath = stylesheetHref(html);
       const faviconResponse = await fetch(`http://localhost:${server.port}/favicon.svg`);
       const wellKnownResponse = await fetch(`http://localhost:${server.port}/.well-known/security`);
       const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
 
       expect(html).toContain("/@vite/client");
+      expect(stylesheetPath).toBe("/client.css");
       await expectHtmlLoadsClientEntry(server.port, html);
       expect(await clientResponse.text()).toContain("vite host test");
       expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
       expect(await faviconResponse.text()).toContain("<svg>dev</svg>");
       expect(await wellKnownResponse.text()).toContain("contact=dev");
       expect(traversalResponse.status).not.toBe(200);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("supports Tailwind through the normal Vite CSS plugin pipeline", async () => {
+    const root = await createHostFixture({
+      clientSource: 'import "./client.css";\nconsole.log("vite host test bg-red-500");\n',
+      configSource: (fixtureRoot) => viteConfigSource(fixtureRoot, { tailwind: true }),
+      linkedNodeModules: ["tailwindcss"],
+      stylesheetSource: '@import "tailwindcss";\n',
+    });
+    const server = await startViteDevServer(root);
+
+    try {
+      const htmlResponse = await fetch(`http://localhost:${server.port}/test`);
+      const html = await htmlResponse.text();
+      const stylesheetPath = stylesheetHref(html);
+      const stylesheetResponse = await fetch(`http://localhost:${server.port}${stylesheetPath}`, {
+        headers: { accept: "text/css" },
+      });
+      const stylesheet = await stylesheetResponse.text();
+
+      expect(stylesheetPath).toBe("/client.css");
+      expect(stylesheetResponse.headers.get("content-type")).toContain("text/css");
+      expect(stylesheet).toContain(".bg-red-500");
     } finally {
       await server.close();
     }
@@ -151,12 +183,16 @@ describe("Vite-native program host", () => {
       const htmlResponse = await fetch(`http://localhost:${server.port}/test`);
       const html = await htmlResponse.text();
       const scriptPath = html.match(/<script type="module" src="([^"]+)"/)?.[1];
+      const stylesheetPath = stylesheetHref(html);
 
       if (!scriptPath) {
         throw new Error("Expected production HTML to include a Vite script");
       }
 
       const scriptResponse = await fetch(`http://localhost:${server.port}${scriptPath}`);
+      const stylesheetResponse = await fetch(`http://localhost:${server.port}${stylesheetPath}`, {
+        headers: { accept: "text/css" },
+      });
       const faviconResponse = await fetch(`http://localhost:${server.port}/favicon.svg`);
       const wellKnownResponse = await fetch(`http://localhost:${server.port}/.well-known/security`);
       const manifestResponse = await fetch(`http://localhost:${server.port}/.vite/manifest.json`);
@@ -164,6 +200,10 @@ describe("Vite-native program host", () => {
       const bootstrap = parseBootstrap(html);
 
       expect(scriptPath).toMatch(/^\/assets\//);
+      expect(stylesheetPath).toMatch(/^\/assets\//);
+      expect(html.indexOf(`href="${stylesheetPath}"`)).toBeLessThan(html.indexOf('<div id="root"'));
+      expect(stylesheetResponse.headers.get("content-type")).toContain("text/css");
+      expect(await stylesheetResponse.text()).toContain("host-test-css");
       expect(html).toContain('data-transformed="true"');
       expect(bootstrap).toMatchObject({
         viewId: "view-initial",
@@ -252,7 +292,10 @@ describe("Vite-native program host", () => {
 });
 
 type HostFixtureOptions = {
+  clientSource?: string;
+  linkedNodeModules?: string[];
   serverSource?: string;
+  stylesheetSource?: string;
   configSource?: string | ((root: string) => string);
 };
 
@@ -444,6 +487,28 @@ async function expectHtmlLoadsClientEntry(port: number, html: string): Promise<v
   ).toBe(true);
 }
 
+async function expectStylesheetServed(
+  port: number,
+  path: string,
+  expectedSource: string,
+): Promise<void> {
+  const response = await fetch(localUrl(port, path), { headers: { accept: "text/css" } });
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("text/css");
+  expect(await response.text()).toContain(expectedSource);
+}
+
+function stylesheetHref(html: string): string {
+  const stylesheetPath = html.match(/<link\b[^>]*rel="stylesheet"[^>]*href="([^"]+)"/)?.[1];
+
+  if (!stylesheetPath) {
+    throw new Error("Expected HTML to include a stylesheet link");
+  }
+
+  return stylesheetPath;
+}
+
 function localUrl(port: number, path: string): string {
   return new URL(path, `http://localhost:${port}`).href;
 }
@@ -455,7 +520,15 @@ function escapeRegExp(value: string): string {
 async function createHostFixture(options: HostFixtureOptions = {}): Promise<string> {
   const root = join(tmpdir(), `stupid-fp-vite-host-${crypto.randomUUID()}`);
   await mkdir(root, { recursive: true });
-  await writeFile(join(root, "client.ts"), "console.log('vite host test');\n");
+  await linkFixtureNodeModules(root, options.linkedNodeModules ?? []);
+  await writeFile(
+    join(root, "client.ts"),
+    options.clientSource ?? 'import "./client.css";\nconsole.log("vite host test");\n',
+  );
+  await writeFile(
+    join(root, "client.css"),
+    options.stylesheetSource ?? ".host-test-css { color: #010203; }\n",
+  );
   await writeFile(join(root, "index.html"), '<html><body><div id="root"></div></body></html>');
   await writeFile(join(root, "server.ts"), options.serverSource ?? serverEntrySource());
   await writeFile(
@@ -467,10 +540,31 @@ async function createHostFixture(options: HostFixtureOptions = {}): Promise<stri
   return root;
 }
 
+async function linkFixtureNodeModules(root: string, packages: string[]): Promise<void> {
+  if (packages.length === 0) {
+    return;
+  }
+
+  const modulesRoot = join(root, "node_modules");
+  await mkdir(modulesRoot, { recursive: true });
+
+  for (const packageName of packages) {
+    const target = join(testDir, "..", "node_modules", packageName);
+    const link = join(modulesRoot, packageName);
+    await symlink(target, link, "junction");
+  }
+}
+
 function viteConfigSource(
   root: string,
-  options?: { duplicatePlugin?: boolean; htmlTransform?: boolean },
+  options?: { duplicatePlugin?: boolean; htmlTransform?: boolean; tailwind?: boolean },
 ): string {
+  const tailwindImport = options?.tailwind
+    ? `import tailwindcss from ${JSON.stringify(
+        relativeImport(root, "node_modules/@tailwindcss/vite/dist/index.mjs"),
+      )};`
+    : "";
+  const tailwindPlugin = options?.tailwind ? "tailwindcss()" : "";
   const plugin = `
     stupidFp({
       template: "index.html",
@@ -485,6 +579,7 @@ function viteConfigSource(
       },
     }`;
   const plugins = [
+    ...(tailwindPlugin ? [tailwindPlugin] : []),
     plugin,
     ...(options?.htmlTransform ? [htmlTransformPlugin] : []),
     ...(options?.duplicatePlugin ? [plugin] : []),
@@ -492,6 +587,7 @@ function viteConfigSource(
 
   return `
 import { stupidFp } from ${JSON.stringify(relativeImport(root, "src/vite.ts"))};
+${tailwindImport}
 
 export default {
   root: ${JSON.stringify(root.replaceAll("\\", "/"))},

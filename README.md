@@ -209,10 +209,12 @@ Vite is the framework host. The app is configured through `vite.config.ts`:
 
 ```ts
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 import { stupidFp } from "./src/vite";
 
 export default defineConfig({
   plugins: [
+    tailwindcss(),
     stupidFp({
       template: "src/index.html",
       client: "src/demo/approvals/client/app.tsx",
@@ -222,6 +224,9 @@ export default defineConfig({
   ],
 });
 ```
+
+The demo imports `./styles.css` from its client entry and that stylesheet starts with
+`@import "tailwindcss";`, so Tailwind runs through the standard Vite plugin pipeline.
 
 ```sh
 bun run dev       # starts Vite as the app host

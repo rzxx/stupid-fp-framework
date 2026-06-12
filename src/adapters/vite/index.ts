@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { WebSocketServer } from "ws";
-import type { HtmlTagDescriptor, Plugin, PluginOption, ViteDevServer } from "vite";
+import type { HtmlTagDescriptor, ModuleNode, Plugin, PluginOption, ViteDevServer } from "vite";
 import {
   createProgramHostFromEntry,
   nodeRequestToRequest,
@@ -170,12 +170,13 @@ export function stupidFp(options: StupidFpOptions = {}): PluginOption[] {
 
       return null;
     },
-    transformIndexHtml(_html, context) {
+    async transformIndexHtml(_html, context) {
       if (!context.server) {
         return [];
       }
 
       return [
+        ...(await devStylesheetTags(context.server, frameworkPluginMetadata(frameworkPlugin))),
         {
           tag: "script",
           attrs: {
@@ -198,6 +199,70 @@ export function stupidFp(options: StupidFpOptions = {}): PluginOption[] {
   }
 
   return plugins;
+}
+
+async function devStylesheetTags(
+  server: ViteDevServer,
+  metadata: StupidFpMetadata,
+): Promise<HtmlTagDescriptor[]> {
+  const styleUrls = await collectDevCssUrls(server, metadata.clientImportPath);
+
+  return styleUrls.map(
+    (href) =>
+      ({
+        tag: "link",
+        attrs: {
+          rel: "stylesheet",
+          href,
+        },
+        injectTo: "head",
+      }) satisfies HtmlTagDescriptor,
+  );
+}
+
+async function collectDevCssUrls(server: ViteDevServer, entryUrl: string): Promise<string[]> {
+  const entry = await transformAndGetDevModule(server, entryUrl);
+  const visited = new Set<string>();
+  const styleUrls = new Set<string>();
+
+  if (entry) {
+    await visit(entry);
+  }
+
+  return [...styleUrls];
+
+  async function visit(module: ModuleNode): Promise<void> {
+    const key = module.id ?? module.url;
+
+    if (visited.has(key)) {
+      return;
+    }
+
+    visited.add(key);
+
+    if (isDevCssUrl(module.url)) {
+      styleUrls.add(module.url);
+      return;
+    }
+
+    await server.transformRequest(module.url);
+
+    for (const imported of module.importedModules) {
+      await visit(imported);
+    }
+  }
+}
+
+async function transformAndGetDevModule(
+  server: ViteDevServer,
+  url: string,
+): Promise<ModuleNode | undefined> {
+  await server.transformRequest(url);
+  return await server.moduleGraph.getModuleByUrl(url);
+}
+
+function isDevCssUrl(url: string): boolean {
+  return /\.(?:css|less|sass|scss|styl|stylus|pcss|postcss)(?:$|\?)/.test(url);
 }
 
 function configureFrameworkDevServer(
@@ -384,6 +449,7 @@ const baseOptions = {
   entry,
   mode: "production",
   clientOutDir: new URL("../client/", import.meta.url),
+  clientEntry: ${JSON.stringify(clientVirtualId)},
   templatePath: new URL(${JSON.stringify(`../client/${productionTemplatePath(metadata)}`)}, import.meta.url),
   manifestPath: new URL("../client/.vite/manifest.json", import.meta.url),
 };

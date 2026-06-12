@@ -20,7 +20,7 @@ mountProgramReact({
   bootstrap,
   render: (initial) => <ApprovalApp bootstrap={initial} />,
   errorFallback: (error) => (
-    <main className="app-shell">
+    <main className="app-shell antialiased">
       <section className="banner error">
         {renderErrorMessage ?? (error instanceof Error ? error.message : "React render failed")}
       </section>
