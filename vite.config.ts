@@ -1,12 +1,12 @@
 import { defineConfig } from "vite";
-import { stupidFpVite } from "./src/vite";
+import { stupidFp } from "./src/vite";
 
 export default defineConfig({
   build: {
     outDir: "dist",
   },
   plugins: [
-    stupidFpVite({
+    stupidFp({
       template: "src/index.html",
       client: "src/demo/approvals/client/app.tsx",
       server: "src/demo/approvals/server.ts",

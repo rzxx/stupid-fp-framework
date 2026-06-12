@@ -13,8 +13,7 @@ declare global {
 
 const root = document.getElementById("root") as HTMLElement;
 const bootstrap = window.__STUPID_FP_BOOTSTRAP__;
-const renderErrorMessage =
-  process.env.NODE_ENV === "development" ? undefined : "An unexpected error occurred";
+const renderErrorMessage = import.meta.env.DEV ? undefined : "An unexpected error occurred";
 
 mountProgramReact({
   root,

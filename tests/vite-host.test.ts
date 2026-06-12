@@ -1,13 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import WebSocket from "ws";
 import { buildViteProgram, serveViteProgram } from "../src/vite";
 import type { ClientEnvelope, ServerEnvelope } from "../src/framework";
+
+const testDir = dirname(fileURLToPath(import.meta.url));
 
 type TestMessage = { type: "action.touch" };
 type TestProjection = { viewId: string; value: number };
 type TestTrace = { traceId: string; events: unknown[] };
+type QueuedSocket = WebSocket & {
+  pendingEnvelopes: ServerEnvelope<TestProjection, TestTrace>[];
+  envelopeWaiters: ((envelope: ServerEnvelope<TestProjection, TestTrace>) => boolean)[];
+};
 
 describe("Vite host stream delivery", () => {
   test("delivers returned envelopes to every connected view they target", async () => {
@@ -313,7 +321,7 @@ export default {
 }
 
 function relativeImport(fromRoot: string, target: string): string {
-  const path = relative(fromRoot, join(import.meta.dir, "..", target)).replaceAll("\\", "/");
+  const path = relative(fromRoot, join(testDir, "..", target)).replaceAll("\\", "/");
   return path.startsWith(".") ? path : `./${path}`;
 }
 
@@ -442,41 +450,61 @@ export function createProgramHost() {
 `;
 }
 
-async function openSocket(port: number): Promise<WebSocket> {
-  const socket = new WebSocket(`ws://localhost:${port}/stream`);
+async function openSocket(port: number): Promise<QueuedSocket> {
+  const socket = new WebSocket(`ws://localhost:${port}/stream`) as QueuedSocket;
+  socket.pendingEnvelopes = [];
+  socket.envelopeWaiters = [];
+
+  socket.on("message", (data) => {
+    const envelope = JSON.parse(String(data)) as ServerEnvelope<TestProjection, TestTrace>;
+    const waiterIndex = socket.envelopeWaiters.findIndex((waiter) => waiter(envelope));
+
+    if (waiterIndex >= 0) {
+      socket.envelopeWaiters.splice(waiterIndex, 1);
+      return;
+    }
+
+    socket.pendingEnvelopes.push(envelope);
+  });
 
   await new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true });
-    socket.addEventListener("error", () => reject(new Error("WebSocket failed to open")), {
-      once: true,
-    });
+    socket.once("open", () => resolve());
+    socket.once("error", () => reject(new Error("WebSocket failed to open")));
   });
 
   return socket;
 }
 
 async function readEnvelope(
-  socket: WebSocket,
+  socket: QueuedSocket,
   type: ServerEnvelope<TestProjection, TestTrace>["type"],
 ): Promise<ServerEnvelope<TestProjection, TestTrace>> {
+  const queuedIndex = socket.pendingEnvelopes.findIndex((envelope) => envelope.type === type);
+
+  if (queuedIndex >= 0) {
+    const [envelope] = socket.pendingEnvelopes.splice(queuedIndex, 1);
+
+    if (envelope) {
+      return envelope;
+    }
+  }
+
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      socket.removeEventListener("message", onMessage);
+      socket.envelopeWaiters = socket.envelopeWaiters.filter((waiter) => waiter !== onMessage);
       reject(new Error(`Timed out waiting for ${type}`));
     }, 1000);
 
-    function onMessage(event: MessageEvent) {
-      const envelope = JSON.parse(String(event.data)) as ServerEnvelope<TestProjection, TestTrace>;
-
+    function onMessage(envelope: ServerEnvelope<TestProjection, TestTrace>) {
       if (envelope.type !== type) {
-        return;
+        return false;
       }
 
       clearTimeout(timeout);
-      socket.removeEventListener("message", onMessage);
       resolve(envelope);
+      return true;
     }
 
-    socket.addEventListener("message", onMessage);
+    socket.envelopeWaiters.push(onMessage);
   });
 }

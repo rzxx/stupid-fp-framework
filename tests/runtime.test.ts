@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { createApprovalRuntime } from "../src/demo/approvals/program";
 import type { ApprovalProjection } from "../src/demo/approvals/types";
 import {

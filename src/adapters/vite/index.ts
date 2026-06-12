@@ -1,8 +1,22 @@
-import { pathToFileURL } from "node:url";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import { readFile, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
-import type { HtmlTagDescriptor, Plugin, PluginOption, ResolvedConfig, ViteDevServer } from "vite";
+import { WebSocketServer, type WebSocket, type RawData } from "ws";
+import type {
+  Connect,
+  HtmlTagDescriptor,
+  Plugin,
+  PluginOption,
+  ResolvedConfig,
+  ViteDevServer,
+} from "vite";
 import {
   parseClientEnvelope,
   type ClientEnvelope,
@@ -13,7 +27,6 @@ import {
   type TraceEnvelope,
 } from "../../framework/stream";
 
-type BunSocketData = { kind: "stream" };
 const pluginName = "stupid-fp-vite";
 const metadataKey = "__stupidFpVite" as const;
 const clientVirtualId = "virtual:stupid-fp/client";
@@ -60,6 +73,8 @@ export type ViteProgramServerEntry<TInput, TProjection, TTrace> = {
 
 export type ViteProgramServerContext = {
   mode: "development" | "production";
+  env: Record<string, string | undefined>;
+  platform: "node";
 };
 
 export type ViteProgramOptions = {
@@ -75,9 +90,9 @@ export type ProgramServer = {
 };
 
 export type StupidFpViteOptions = {
-  template: string;
-  client: string;
-  server: string;
+  template?: string;
+  client?: string;
+  server?: string;
   reactCompiler?: boolean;
 };
 
@@ -96,13 +111,155 @@ type StupidFpVitePlugin = Plugin & {
   [metadataKey]?: StupidFpViteMetadata;
 };
 
-export function stupidFpVite(options: StupidFpViteOptions): PluginOption[] {
-  validatePluginOptions(options);
+export function stupidFp(options: StupidFpViteOptions = {}): PluginOption[] {
+  return stupidFpVite(options);
+}
+
+export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] {
+  const resolvedOptions = resolvePluginOptions(options);
 
   const frameworkPlugin: StupidFpVitePlugin = {
     name: pluginName,
+    config() {
+      return {
+        appType: "custom",
+        environments: {
+          client: {
+            build: {
+              outDir: "dist/client",
+              emptyOutDir: true,
+              manifest: true,
+              rolldownOptions: {
+                input: [resolvedOptions.template, clientVirtualId],
+              },
+            },
+          },
+          ssr: {
+            consumer: "server",
+            dev: {
+              moduleRunnerTransform: true,
+            },
+            build: {
+              outDir: "dist/server",
+              emptyOutDir: true,
+              ssr: true,
+              rolldownOptions: {
+                input: serverVirtualId,
+                output: {
+                  entryFileNames: "entry-server.js",
+                },
+              },
+            },
+          },
+        },
+        server: {
+          forwardConsole: true,
+        },
+      };
+    },
     configResolved(config) {
-      frameworkPlugin[metadataKey] = resolvePluginMetadata(config, options);
+      frameworkPlugin[metadataKey] = resolvePluginMetadata(config, resolvedOptions);
+    },
+    configureServer(server) {
+      const delivery = new SocketDelivery<unknown, unknown>();
+      const socketServer = new WebSocketServer({ noServer: true });
+      let programPromise: Promise<PreparedProgram<unknown, unknown, unknown>> | null = null;
+
+      function loadProgram() {
+        programPromise ??= prepareDevelopmentProgramFromServer(server, frameworkPluginMetadata());
+        return programPromise;
+      }
+
+      function frameworkPluginMetadata(): StupidFpViteMetadata {
+        const metadata = frameworkPlugin[metadataKey];
+
+        if (!metadata) {
+          throw new Error("stupidFpVite() plugin did not resolve its app metadata");
+        }
+
+        return metadata;
+      }
+
+      server.httpServer?.on("upgrade", (request, socket, head) => {
+        const url = request.url ? new URL(request.url, requestUrlOrigin(request)) : null;
+
+        if (url?.pathname !== "/stream") {
+          return;
+        }
+
+        socketServer.handleUpgrade(request, socket, head, (socket) => {
+          socketServer.emit("connection", socket, request);
+        });
+      });
+
+      socketServer.on("connection", (socket) => {
+        socket.on("message", async (payload) => {
+          const program = await loadProgram();
+          const host = await program.loadHost();
+          const parsed = parseClientEnvelope<unknown>(rawSocketPayload(payload));
+
+          if (parsed.type === "error") {
+            socket.send(JSON.stringify(parsed));
+            return;
+          }
+
+          const result =
+            parsed.type === "connect"
+              ? await host.runtime.connect(parsed)
+              : await host.runtime.receive(parsed);
+
+          delivery.send(socket, result.envelopes);
+        });
+
+        socket.on("close", () => {
+          delivery.close(socket);
+        });
+      });
+
+      server.httpServer?.on("close", () => {
+        socketServer.close();
+        void programPromise?.then((program) => program.close());
+      });
+
+      return () => {
+        server.middlewares.use(async (nodeRequest, nodeResponse, next) => {
+          if (!nodeRequest.url) {
+            next();
+            return;
+          }
+
+          const request = nodeRequestToRequest(nodeRequest);
+          const url = new URL(request.url);
+
+          if (url.pathname === "/stream") {
+            await sendNodeResponse(
+              nodeResponse,
+              new Response("WebSocket upgrade required", { status: 400 }),
+            );
+            return;
+          }
+
+          if (hasUnsafePathSegment(url.pathname)) {
+            await sendNodeResponse(nodeResponse, new Response("Bad request", { status: 400 }));
+            return;
+          }
+
+          if (url.pathname.startsWith("/.vite/")) {
+            await sendNodeResponse(nodeResponse, new Response("Not found", { status: 404 }));
+            return;
+          }
+
+          const publicAsset = await serveViteFile(server.config.publicDir, request);
+
+          if (publicAsset) {
+            await sendNodeResponse(nodeResponse, publicAsset);
+            return;
+          }
+
+          const program = await loadProgram();
+          await sendNodeResponse(nodeResponse, await renderProgramRequest(program, request));
+        });
+      };
     },
     resolveId(source) {
       if (source === clientVirtualId) {
@@ -148,10 +305,18 @@ export function stupidFpVite(options: StupidFpViteOptions): PluginOption[] {
         } satisfies HtmlTagDescriptor,
       ];
     },
+    async buildApp(builder) {
+      const metadata = frameworkPlugin[metadataKey] ?? findStupidFpViteMetadata(builder.config);
+      const outDir = resolvedOutDir(builder.config);
+
+      await builder.build(builder.environments.client);
+      await builder.build(builder.environments.ssr);
+      await writeProductionServerEntrypoint(outDir, metadata);
+    },
   };
   const plugins: PluginOption[] = [frameworkPlugin, ...react()];
 
-  if (options.reactCompiler) {
+  if (resolvedOptions.reactCompiler) {
     plugins.push(babel({ presets: [reactCompilerPreset()] }));
   }
 
@@ -161,7 +326,7 @@ export function stupidFpVite(options: StupidFpViteOptions): PluginOption[] {
 export async function buildViteProgram(
   options: Omit<ViteProgramOptions, "port"> = {},
 ): Promise<void> {
-  const previousNodeEnv = Bun.env.NODE_ENV;
+  const previousNodeEnv = process.env.NODE_ENV;
   const { vite, app, config } = await resolveViteProgramConfig("build", {
     ...options,
     mode: options.mode ?? "production",
@@ -171,7 +336,7 @@ export async function buildViteProgram(
   const serverOutDir = join(outDir, "server");
 
   if (!previousNodeEnv) {
-    Bun.env.NODE_ENV = "production";
+    process.env.NODE_ENV = "production";
   }
 
   try {
@@ -183,7 +348,7 @@ export async function buildViteProgram(
         outDir: clientOutDir,
         emptyOutDir: true,
         manifest: true,
-        rollupOptions: {
+        rolldownOptions: {
           input: [app.template, app.clientVirtualId],
         },
       },
@@ -197,7 +362,7 @@ export async function buildViteProgram(
         outDir: serverOutDir,
         emptyOutDir: true,
         ssr: true,
-        rollupOptions: {
+        rolldownOptions: {
           input: app.serverVirtualId,
           output: {
             entryFileNames: "entry-server.js",
@@ -207,9 +372,9 @@ export async function buildViteProgram(
     });
   } finally {
     if (previousNodeEnv === undefined) {
-      delete Bun.env.NODE_ENV;
+      delete process.env.NODE_ENV;
     } else {
-      Bun.env.NODE_ENV = previousNodeEnv;
+      process.env.NODE_ENV = previousNodeEnv;
     }
   }
 }
@@ -225,82 +390,87 @@ export async function serveViteProgram<TInput, TProjection, TTrace>(
   });
   const outDir = resolvedOutDir(resolved.config);
   const program = await prepareProgram<TInput, TProjection, TTrace>(resolved, outDir, mode);
-  let server: Bun.Server<BunSocketData>;
+  const socketServer = new WebSocketServer({ noServer: true });
+  const httpServer = createHttpServer(async (nodeRequest, nodeResponse) => {
+    try {
+      const request = nodeRequestToRequest(nodeRequest);
+      const url = new URL(request.url);
+
+      if (hasUnsafePathSegment(url.pathname)) {
+        await sendNodeResponse(nodeResponse, new Response("Bad request", { status: 400 }));
+        return;
+      }
+
+      if (url.pathname.startsWith("/.vite/")) {
+        await sendNodeResponse(nodeResponse, new Response("Not found", { status: 404 }));
+        return;
+      }
+
+      if (url.pathname === "/stream") {
+        await sendNodeResponse(
+          nodeResponse,
+          new Response("WebSocket upgrade required", { status: 400 }),
+        );
+        return;
+      }
+
+      if (await program.serveNodeRequest?.(nodeRequest, nodeResponse)) {
+        return;
+      }
+
+      const asset = await program.serveAsset(request);
+
+      if (asset) {
+        await sendNodeResponse(nodeResponse, asset);
+        return;
+      }
+
+      await sendNodeResponse(nodeResponse, await renderProgramRequest(program, request));
+    } catch (error) {
+      await program.close();
+      nodeResponse.statusCode = 500;
+      nodeResponse.end(error instanceof Error ? error.message : "Internal server error");
+    }
+  });
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    const url = request.url ? new URL(request.url, requestUrlOrigin(request)) : null;
+
+    if (url?.pathname !== "/stream") {
+      socket.destroy();
+      return;
+    }
+
+    socketServer.handleUpgrade(request, socket, head, (socket) => {
+      socketServer.emit("connection", socket, request);
+    });
+  });
+
+  socketServer.on("connection", (socket) => {
+    socket.on("message", async (payload) => {
+      const host = await program.loadHost();
+      const parsed = parseClientEnvelope<TInput>(rawSocketPayload(payload));
+
+      if (parsed.type === "error") {
+        socket.send(JSON.stringify(parsed));
+        return;
+      }
+
+      const result =
+        parsed.type === "connect"
+          ? await host.runtime.connect(parsed)
+          : await host.runtime.receive(parsed);
+
+      delivery.send(socket, result.envelopes);
+    });
+
+    socket.on("close", () => {
+      delivery.close(socket);
+    });
+  });
 
   try {
-    server = Bun.serve<BunSocketData>({
-      hostname: options.hostname,
-      port: options.port,
-      async fetch(request, bunServer) {
-        const url = new URL(request.url);
-
-        if (hasUnsafePathSegment(url.pathname)) {
-          return new Response("Bad request", { status: 400 });
-        }
-
-        if (url.pathname.startsWith("/.vite/")) {
-          return new Response("Not found", { status: 404 });
-        }
-
-        if (url.pathname === "/stream") {
-          if (bunServer.upgrade(request, { data: { kind: "stream" as const } })) {
-            return;
-          }
-
-          return new Response("WebSocket upgrade failed", { status: 400 });
-        }
-
-        const asset = await program.serveAsset(request);
-
-        if (asset) {
-          return asset;
-        }
-
-        const host = await program.loadHost();
-        const route = await host.resolve?.(request);
-        const template = await program.loadTemplate(request);
-
-        if (route && host.render) {
-          const result = await host.runtime.connect({
-            type: "connect",
-            route: route.route,
-            params: route.params,
-          });
-          const bootstrap = bootstrapFromEnvelopes(result.envelopes);
-          const rendered = await host.render(bootstrap, { request });
-
-          return htmlResponse(
-            await program.transformHtml(
-              request,
-              injectInitialRender(template, rendered, bootstrap),
-            ),
-          );
-        }
-
-        return htmlResponse(await program.transformHtml(request, template));
-      },
-      websocket: {
-        async message(socket, payload) {
-          const host = await program.loadHost();
-          const parsed = parseClientEnvelope<TInput>(String(payload));
-
-          if (parsed.type === "error") {
-            socket.send(JSON.stringify(parsed));
-            return;
-          }
-
-          const result =
-            parsed.type === "connect"
-              ? await host.runtime.connect(parsed)
-              : await host.runtime.receive(parsed);
-
-          delivery.send(socket, result.envelopes);
-        },
-        close(socket) {
-          delivery.close(socket);
-        },
-      },
-    });
+    await listen(httpServer, options.port ?? 0, options.hostname);
   } catch (error) {
     await program.close();
     throw error;
@@ -310,15 +480,23 @@ export async function serveViteProgram<TInput, TProjection, TTrace>(
 
   return {
     get port() {
-      if (server.port === undefined) {
-        throw new Error("Expected Vite program server to bind a port");
+      const address = httpServer.address();
+
+      if (!address || typeof address === "string") {
+        throw new Error("Expected Vite program server to bind a TCP port");
       }
 
-      return server.port;
+      return address.port;
     },
     stop(closeActiveConnections?: boolean) {
       void program.close();
-      server.stop(closeActiveConnections);
+      socketServer.close();
+
+      if (closeActiveConnections) {
+        httpServer.closeAllConnections();
+      }
+
+      httpServer.close();
     },
   };
 }
@@ -328,6 +506,7 @@ type PreparedProgram<TInput, TProjection, TTrace> = {
   loadTemplate: (request: Request) => Promise<string>;
   transformHtml: (request: Request, html: string) => Promise<string>;
   serveAsset: (request: Request) => Promise<Response | null>;
+  serveNodeRequest?: (request: IncomingMessage, response: ServerResponse) => Promise<boolean>;
   printUrls: () => void;
   close: () => Promise<void>;
 };
@@ -337,6 +516,9 @@ type ResolvedViteProgramConfig = {
   config: ResolvedConfig;
   app: StupidFpViteMetadata;
 };
+
+type RequiredPluginOptions = Required<Pick<StupidFpViteOptions, "template" | "client" | "server">> &
+  Pick<StupidFpViteOptions, "reactCompiler">;
 
 async function prepareProgram<TInput, TProjection, TTrace>(
   resolved: ResolvedViteProgramConfig,
@@ -356,10 +538,12 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
     mode: resolved.config.mode,
     appType: "custom",
     clearScreen: false,
-    logLevel: Bun.env.NODE_ENV === "test" ? "error" : "info",
+    logLevel: process.env.NODE_ENV === "test" ? "error" : "info",
     server: {
-      hmr: true,
+      middlewareMode: true,
+      hmr: false,
       strictPort: false,
+      forwardConsole: true,
     },
     environments: {
       ssr: {
@@ -369,17 +553,14 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
       },
     },
   });
-  await server.listen();
 
   const runner = resolved.vite.createServerModuleRunner(server.environments.ssr);
-  const origin = localOrigin(server);
-  const publicDir = server.config.publicDir;
   let cachedHost: ViteProgramHost<TInput, TProjection, TTrace> | null = null;
 
   server.watcher.on("change", () => {
     cachedHost = null;
     runner.clearCache();
-    server.ws.send({ type: "full-reload" });
+    server.environments.client.hot.send({ type: "full-reload" });
   });
 
   const prepared: PreparedProgram<TInput, TProjection, TTrace> = {
@@ -395,20 +576,26 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
       return cachedHost;
     },
     async loadTemplate() {
-      return Bun.file(resolved.app.template).text();
+      return readFile(resolved.app.template, "utf8");
     },
     async transformHtml(request, html) {
-      const transformed = await server.transformIndexHtml(new URL(request.url).pathname, html);
-      return prefixViteDevAssets(transformed, origin);
+      return server.transformIndexHtml(new URL(request.url).pathname, html);
     },
-    async serveAsset(request) {
-      const publicAsset = await serveVitePublicAsset(publicDir, request);
+    async serveAsset() {
+      return null;
+    },
+    async serveNodeRequest(request, response) {
+      const url = request.url ? new URL(request.url, requestUrlOrigin(request)) : null;
 
-      if (publicAsset) {
-        return publicAsset;
+      if (
+        !url ||
+        (!isViteAssetPath(url.pathname) &&
+          !(await isPublicAssetRequest(server.config.publicDir, url.pathname)))
+      ) {
+        return false;
       }
 
-      return proxyViteAsset(origin, request);
+      return serveViteMiddleware(server.middlewares, request, response);
     },
     printUrls() {},
     async close() {
@@ -427,6 +614,51 @@ async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
   return prepared;
 }
 
+async function prepareDevelopmentProgramFromServer<TInput, TProjection, TTrace>(
+  server: ViteDevServer,
+  app: StupidFpViteMetadata,
+): Promise<PreparedProgram<TInput, TProjection, TTrace>> {
+  const vite = await import("vite");
+  const runner = vite.createServerModuleRunner(server.environments.ssr);
+  let cachedHost: ViteProgramHost<TInput, TProjection, TTrace> | null = null;
+
+  server.watcher.on("change", () => {
+    cachedHost = null;
+    runner.clearCache();
+    server.environments.client.hot.send({ type: "full-reload" });
+  });
+
+  const prepared: PreparedProgram<TInput, TProjection, TTrace> = {
+    async loadHost() {
+      if (cachedHost) {
+        return cachedHost;
+      }
+
+      const mod = await runner.import<ViteProgramServerEntry<TInput, TProjection, TTrace>>(
+        app.serverVirtualId,
+      );
+      cachedHost = await createProgramHostFromModule(mod, "development");
+      return cachedHost;
+    },
+    async loadTemplate() {
+      return readFile(app.template, "utf8");
+    },
+    async transformHtml(request, html) {
+      return server.transformIndexHtml(new URL(request.url).pathname, html);
+    },
+    async serveAsset() {
+      return null;
+    },
+    printUrls() {},
+    async close() {
+      await runner.close();
+    },
+  };
+
+  await prepared.loadHost();
+  return prepared;
+}
+
 async function prepareProductionProgram<TInput, TProjection, TTrace>(
   resolved: ResolvedViteProgramConfig,
   outDir: string,
@@ -434,7 +666,10 @@ async function prepareProductionProgram<TInput, TProjection, TTrace>(
   const clientOutDir = join(outDir, "client");
   const serverEntry = join(outDir, "server", "entry-server.js");
   const manifestPath = join(clientOutDir, ".vite", "manifest.json");
-  const manifest = (await Bun.file(manifestPath).json()) as Record<string, ViteManifestEntry>;
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<
+    string,
+    ViteManifestEntry
+  >;
   const manifestEntry = resolveManifestEntry(manifest);
   const templatePath = resolveProductionTemplatePath(clientOutDir, resolved.app, manifest);
   let productionHostPromise: Promise<ViteProgramHost<TInput, TProjection, TTrace>> | null = null;
@@ -454,7 +689,7 @@ async function prepareProductionProgram<TInput, TProjection, TTrace>(
       return productionHostPromise;
     },
     async loadTemplate() {
-      return Bun.file(templatePath).text();
+      return readFile(templatePath, "utf8");
     },
     async transformHtml(_request, html) {
       return injectViteProductionAssets(html, manifest, manifestEntry);
@@ -472,6 +707,31 @@ async function prepareProductionProgram<TInput, TProjection, TTrace>(
   return prepared;
 }
 
+async function renderProgramRequest<TInput, TProjection, TTrace>(
+  program: PreparedProgram<TInput, TProjection, TTrace>,
+  request: Request,
+): Promise<Response> {
+  const host = await program.loadHost();
+  const route = await host.resolve?.(request);
+  const template = await program.loadTemplate(request);
+
+  if (route && host.render) {
+    const result = await host.runtime.connect({
+      type: "connect",
+      route: route.route,
+      params: route.params,
+    });
+    const bootstrap = bootstrapFromEnvelopes(result.envelopes);
+    const rendered = await host.render(bootstrap, { request });
+
+    return htmlResponse(
+      await program.transformHtml(request, injectInitialRender(template, rendered, bootstrap)),
+    );
+  }
+
+  return htmlResponse(await program.transformHtml(request, template));
+}
+
 function htmlResponse(html: string): Response {
   return new Response(html, {
     headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -486,7 +746,7 @@ async function createProgramHostFromModule<TInput, TProjection, TTrace>(
     throw new Error("Vite server entry must export createProgramHost(context)");
   }
 
-  return mod.createProgramHost({ mode });
+  return mod.createProgramHost({ mode, env: process.env, platform: "node" });
 }
 
 async function resolveViteProgramConfig(
@@ -533,23 +793,18 @@ function isStupidFpVitePlugin(plugin: Plugin): plugin is StupidFpVitePlugin {
   return plugin.name === pluginName;
 }
 
-function validatePluginOptions(options: StupidFpViteOptions): void {
-  if (!options.template) {
-    throw new Error("stupidFpVite() requires a template path");
-  }
-
-  if (!options.client) {
-    throw new Error("stupidFpVite() requires a client entry path");
-  }
-
-  if (!options.server) {
-    throw new Error("stupidFpVite() requires a server entry path");
-  }
+function resolvePluginOptions(options: StupidFpViteOptions): RequiredPluginOptions {
+  return {
+    template: options.template ?? "src/app.html",
+    client: options.client ?? "src/entry.client.tsx",
+    server: options.server ?? "src/entry.server.ts",
+    reactCompiler: options.reactCompiler,
+  };
 }
 
 function resolvePluginMetadata(
   config: ResolvedConfig,
-  options: StupidFpViteOptions,
+  options: RequiredPluginOptions,
 ): StupidFpViteMetadata {
   const template = resolve(config.root, options.template);
   const client = resolve(config.root, options.client);
@@ -575,32 +830,6 @@ function resolvedOutDir(config: ResolvedConfig): string {
 
 function rootImportPath(root: string, file: string): string {
   return `/${relative(root, file).replaceAll(sep, "/")}`;
-}
-
-function localOrigin(server: ViteDevServer): string {
-  const address = server.httpServer?.address();
-
-  if (address && typeof address === "object") {
-    const host =
-      address.address === "::" ||
-      address.address === "::1" ||
-      address.address === "0.0.0.0"
-        ? "localhost"
-        : formatHost(address.address);
-    return `http://${host}:${address.port}`;
-  }
-
-  const localUrl = server.resolvedUrls?.local[0];
-
-  if (localUrl) {
-    return localUrl.replace(/\/$/, "");
-  }
-
-  return "http://localhost:5173";
-}
-
-function formatHost(host: string): string {
-  return host.includes(":") ? `[${host}]` : host;
 }
 
 function bootstrapFromEnvelopes<TProjection, TTrace>(
@@ -693,21 +922,6 @@ function resolveProductionTemplatePath(
   return join(clientOutDir, manifestTemplate);
 }
 
-async function proxyViteAsset(origin: string, request: Request): Promise<Response | null> {
-  const url = new URL(request.url);
-
-  if (!isViteAssetPath(url.pathname)) {
-    return null;
-  }
-
-  const upstream = await fetch(`${origin}${url.pathname}${url.search}`);
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: upstream.headers,
-  });
-}
-
 function isViteAssetPath(pathname: string): boolean {
   return (
     pathname.startsWith("/@vite/") ||
@@ -737,18 +951,6 @@ function hasUnsafePathSegment(pathname: string): boolean {
   }
 
   return decoded.includes("\0") || decoded.split("/").includes("..");
-}
-
-function prefixViteDevAssets(html: string, origin: string): string {
-  const withAttrs = html.replaceAll(
-    /(src|href)="\/(@vite|@react-refresh|@id|@fs|node_modules|src|demo|client)/g,
-    `$1="${origin}/$2`,
-  );
-
-  return withAttrs.replaceAll(
-    /((?:import|from)\s+["'])\/(@vite|@react-refresh|@id|@fs|node_modules|src|demo|client)/g,
-    `$1${origin}/$2`,
-  );
 }
 
 function injectViteProductionAssets(
@@ -865,10 +1067,6 @@ async function serveViteProductionAsset(
   return serveViteFile(clientOutDir, request, { denyViteMetadata: true });
 }
 
-async function serveVitePublicAsset(publicDir: string, request: Request): Promise<Response | null> {
-  return serveViteFile(publicDir, request);
-}
-
 async function serveViteFile(
   root: string,
   request: Request,
@@ -894,25 +1092,148 @@ async function serveViteFile(
     return null;
   }
 
-  const file = Bun.file(assetPath);
+  const fileStat = await stat(assetPath).catch(() => null);
 
-  if (!(await file.exists())) {
+  if (!fileStat?.isFile()) {
     return null;
   }
 
-  return new Response(file, {
+  return new Response(await readFile(assetPath), {
     headers: { "Content-Type": contentType(pathname) },
   });
 }
 
-class SocketDelivery<TProjection, TTrace> {
-  readonly #viewsockets = new Map<string, Set<Bun.ServerWebSocket<unknown>>>();
-  readonly #socketview = new WeakMap<Bun.ServerWebSocket<unknown>, string>();
+async function isPublicAssetRequest(publicDir: string, pathname: string): Promise<boolean> {
+  let decoded: string;
 
-  send(
-    current: Bun.ServerWebSocket<unknown>,
-    envelopes: ServerEnvelope<TProjection, TTrace>[],
-  ): void {
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return false;
+  }
+
+  if (decoded.includes("\0")) {
+    return false;
+  }
+
+  const assetPath = resolve(publicDir, `.${decoded}`);
+  const routeToAsset = relative(publicDir, assetPath);
+
+  if (routeToAsset.startsWith("..") || isAbsolute(routeToAsset)) {
+    return false;
+  }
+
+  return Boolean((await stat(assetPath).catch(() => null))?.isFile());
+}
+
+function nodeRequestToRequest(request: IncomingMessage): Request {
+  return new Request(
+    request.url ? new URL(request.url, requestUrlOrigin(request)) : requestUrlOrigin(request),
+    {
+      headers: nodeHeaders(request),
+      method: request.method,
+    },
+  );
+}
+
+function nodeHeaders(request: IncomingMessage): Headers {
+  const headers = new Headers();
+
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        headers.append(name, entry);
+      }
+      continue;
+    }
+
+    if (value !== undefined) {
+      headers.set(name, value);
+    }
+  }
+
+  return headers;
+}
+
+function requestUrlOrigin(request: IncomingMessage): string {
+  const host = request.headers.host ?? "localhost";
+  return `http://${host}`;
+}
+
+async function sendNodeResponse(response: ServerResponse, webResponse: Response): Promise<void> {
+  response.statusCode = webResponse.status;
+  response.statusMessage = webResponse.statusText;
+
+  webResponse.headers.forEach((value, key) => {
+    response.setHeader(key, value);
+  });
+
+  if (!webResponse.body) {
+    response.end();
+    return;
+  }
+
+  response.end(Buffer.from(new Uint8Array(await webResponse.arrayBuffer())));
+}
+
+function serveViteMiddleware(
+  middleware: Connect.Server,
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    middleware(request, response, (error?: unknown) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve(response.writableEnded);
+    });
+  });
+}
+
+function listen(
+  server: ReturnType<typeof createHttpServer>,
+  port: number,
+  hostname: string | undefined,
+): Promise<void> {
+  return new Promise((resolveListen, rejectListen) => {
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      rejectListen(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolveListen();
+    };
+
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, hostname);
+  });
+}
+
+function rawSocketPayload(payload: RawData): string {
+  if (Array.isArray(payload)) {
+    return Buffer.concat(payload).toString("utf8");
+  }
+
+  return Buffer.from(new Uint8Array(payload)).toString("utf8");
+}
+
+async function writeProductionServerEntrypoint(
+  _outDir: string,
+  _metadata: StupidFpViteMetadata,
+): Promise<void> {
+  return undefined;
+}
+
+class SocketDelivery<TProjection, TTrace> {
+  readonly #viewSockets = new Map<string, Set<WebSocket>>();
+  readonly #socketView = new WeakMap<WebSocket, string>();
+
+  send(current: WebSocket, envelopes: ServerEnvelope<TProjection, TTrace>[]): void {
     for (const envelope of envelopes) {
       const target = "viewId" in envelope ? envelope.viewId : undefined;
 
@@ -925,7 +1246,7 @@ class SocketDelivery<TProjection, TTrace> {
         continue;
       }
 
-      const sockets = this.#viewsockets.get(target);
+      const sockets = this.#viewSockets.get(target);
 
       if (!sockets) {
         continue;
@@ -937,30 +1258,30 @@ class SocketDelivery<TProjection, TTrace> {
     }
   }
 
-  close(socket: Bun.ServerWebSocket<unknown>): void {
-    const viewId = this.#socketview.get(socket);
+  close(socket: WebSocket): void {
+    const viewId = this.#socketView.get(socket);
 
     if (!viewId) {
       return;
     }
 
-    const sockets = this.#viewsockets.get(viewId);
+    const sockets = this.#viewSockets.get(viewId);
 
     sockets?.delete(socket);
 
     if (sockets?.size === 0) {
-      this.#viewsockets.delete(viewId);
+      this.#viewSockets.delete(viewId);
     }
 
-    this.#socketview.delete(socket);
+    this.#socketView.delete(socket);
   }
 
-  private attach(socket: Bun.ServerWebSocket<unknown>, viewId: string): void {
+  private attach(socket: WebSocket, viewId: string): void {
     this.close(socket);
 
-    const sockets = this.#viewsockets.get(viewId) ?? new Set<Bun.ServerWebSocket<unknown>>();
+    const sockets = this.#viewSockets.get(viewId) ?? new Set<WebSocket>();
     sockets.add(socket);
-    this.#viewsockets.set(viewId, sockets);
-    this.#socketview.set(socket, viewId);
+    this.#viewSockets.set(viewId, sockets);
+    this.#socketView.set(socket, viewId);
   }
 }

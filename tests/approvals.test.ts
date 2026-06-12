@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { createApprovalRuntime } from "../src/demo/approvals/program";
 import { ActiveDeploymentRunsResource } from "../src/demo/approvals/resources";
 import { createApprovalServices } from "../src/demo/approvals/services";
@@ -12,7 +12,7 @@ describe("deployment approval workflow", () => {
     const connected = await connect(runtime);
     const deploymentId = connected.projection.pendingDeployments[0]?.id;
 
-    expect(deploymentId).toBeString();
+    expect(typeof deploymentId).toBe("string");
 
     const result = await runtime.receive({
       type: "input",

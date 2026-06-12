@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -120,7 +120,7 @@ describe("framework contract", () => {
     expect(projection.count).toBe(0);
 
     const envelope = latestProjection(result.envelopes);
-    expect(envelope.cursor).toBeString();
+    expect(typeof envelope.cursor).toBe("string");
     expect(envelope.regions).toEqual(
       expect.arrayContaining([
         {

@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
-import { join, normalize, relative } from "node:path";
+import { dirname, join, normalize, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Action, createRuntime, Program, Screen, UIState } from "stupid-fp-framework/runtime";
 import { Schema } from "stupid-fp-framework/effect";
 import { Resource, ResourceGraph } from "stupid-fp-framework/resource";
@@ -11,11 +12,13 @@ import { applyRegionValuePatchAutomatically } from "stupid-fp-framework/patch";
 import type { ProgramStreamReactOptions } from "stupid-fp-framework/react";
 import { serveViteProgram } from "stupid-fp-framework/vite";
 
+const testDir = dirname(fileURLToPath(import.meta.url));
+
 describe("modular adoption surface", () => {
   test("public subpath exports are importable without the full framework barrel", () => {
-    const packageJson = JSON.parse(
-      readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
-    ) as { exports: Record<string, string> };
+    const packageJson = JSON.parse(readFileSync(join(testDir, "..", "package.json"), "utf8")) as {
+      exports: Record<string, string>;
+    };
     const traces = new TraceStore();
     const graph = new ResourceGraph();
     const store = new MemoryRuntimeStore<Record<string, never>, Record<string, never>>();
@@ -30,6 +33,7 @@ describe("modular adoption surface", () => {
     expect(reactOptions).toBeNull();
     expect(typeof serveViteProgram).toBe("function");
     expect(packageJson.exports["./vite"]).toBe("./src/vite.ts");
+    expect(packageJson.exports["./node"]).toBe("./src/node.ts");
     expect(packageJson.exports["./bun"]).toBeUndefined();
   });
 
@@ -223,7 +227,7 @@ describe("modular adoption surface", () => {
   });
 
   test("React adapters do not import the full framework barrel", () => {
-    for (const file of sourceFiles(join(import.meta.dir, "..", "src", "adapters", "react"))) {
+    for (const file of sourceFiles(join(testDir, "..", "src", "adapters", "react"))) {
       const content = readFileSync(file, "utf8");
 
       expect(content).not.toContain('from "../../framework"');
@@ -232,7 +236,7 @@ describe("modular adoption surface", () => {
   });
 
   test("public core framework modules have no dependency cycles", () => {
-    expect(findCycles(join(import.meta.dir, "..", "src", "framework"))).toEqual([]);
+    expect(findCycles(join(testDir, "..", "src", "framework"))).toEqual([]);
   });
 });
 

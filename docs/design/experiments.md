@@ -43,7 +43,7 @@ A server message can produce a streamed UI patch without traditional SSR or API 
 
 Build:
 
-- Bun-hosted app shell
+- Vite-hosted app shell
 - simple browser-to-server stream
 - simple server-to-browser patch format
 - one interactive screen where a message changes server state and streams a patch
@@ -170,7 +170,7 @@ Pivot questions:
 
 - Do we need event sourcing, snapshots, or both?
 - What is the minimum resume story that proves serverless viability?
-- Which host assumptions are Bun-specific and which are portable?
+- Which host assumptions are runtime-adapter-specific and which are portable?
 
 ### Phase 7: Causal Trace Viewer
 

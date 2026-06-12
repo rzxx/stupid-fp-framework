@@ -30,7 +30,8 @@ custom permission context. Base-key invalidation should refresh all observed sco
 exact-scope invalidation is a later optimization.
 
 The kernel should be able to restore a view checkpoint and process an input without depending on
-process memory. Bun is the first host adapter, not the whole runtime model.
+process memory. Vite is the app host, Node is the default runtime adapter, and other runtimes should
+remain adapter-shaped rather than framework-core assumptions.
 
 ## Files
 

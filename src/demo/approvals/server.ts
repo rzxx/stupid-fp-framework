@@ -6,13 +6,13 @@ import { renderApprovalApp } from "./client/render-approval";
 import type { ViteProgramServerContext, ViteProgramHost } from "../../vite";
 
 export function createProgramHost(
-  _context: ViteProgramServerContext,
+  context: ViteProgramServerContext,
 ): ViteProgramHost<ApprovalClientInput, ApprovalProjection, TraceSnapshot> {
+  const runtimeStorePath = context.env.RUNTIME_STORE_PATH;
+
   return {
     runtime: createApprovalRuntime({
-      store: Bun.env.RUNTIME_STORE_PATH
-        ? new JsonFileRuntimeStore(Bun.env.RUNTIME_STORE_PATH)
-        : undefined,
+      store: runtimeStorePath ? new JsonFileRuntimeStore(runtimeStorePath) : undefined,
     }),
     resolve: resolveApprovalRoute,
     render: renderApprovalApp,

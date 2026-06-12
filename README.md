@@ -200,24 +200,23 @@ See [Model & Vocabulary](docs/design/model.md#state-ownership) for the full owne
 git clone <this-repo>
 cd stupid-fp-framework
 bun install
-bun dev
+bun run dev
 ```
 
 Opens on `http://localhost:3000` with the Deployment Approval demo — a live app where you can select deployments, approve them, and watch the causality traces update in real time.
 
-The host is configured through `vite.config.ts`:
+Vite is the framework host. The app is configured through `vite.config.ts`:
 
 ```ts
 import { defineConfig } from "vite";
-import { stupidFpVite } from "./src/vite";
+import { stupidFp } from "./src/vite";
 
 export default defineConfig({
-  root: "src",
   plugins: [
-    stupidFpVite({
-      template: "index.html",
-      client: "demo/approvals/client/app.tsx",
-      server: "demo/approvals/server.ts",
+    stupidFp({
+      template: "src/index.html",
+      client: "src/demo/approvals/client/app.tsx",
+      server: "src/demo/approvals/server.ts",
       reactCompiler: true,
     }),
   ],
@@ -225,10 +224,11 @@ export default defineConfig({
 ```
 
 ```sh
-bun build         # builds the Vite client and SSR server outputs
-bun test          # runs the contract + integration + acceptance tests
-bun typecheck     # tsc --noEmit
-bun check         # typecheck + lint + format check
+bun run dev       # starts Vite as the app host
+bun run build     # runs Vite's app build for client and server outputs
+bun run test      # runs the Vitest contract + integration + acceptance tests
+bun run typecheck # tsc --noEmit
+bun run check     # typecheck + lint + format check
 ```
 
 ---
@@ -326,8 +326,9 @@ That's the bet. It might be wrong. But it's the reason this repo exists.
 ## built with
 
 - **[Effect](https://effect.website)** — typed effects for advanced server logic (optional)
-- **[Bun](https://bun.sh)** — runtime, WebSocket host, test runner, package manager
-- **[Vite](https://vite.dev)** — canonical host pipeline for client modules, CSS, React Refresh, SSR transforms, and production assets
+- **[Vite](https://vite.dev)** — canonical host pipeline for client modules, CSS, React Refresh, SSR transforms, app builds, dev middleware, env, and production assets
+- **[Node.js](https://nodejs.org)** — default server runtime target
+- **[Bun](https://bun.sh)** — package manager used by this repo; runtime support is adapter-shaped, not the framework core
 - **[React 19](https://react.dev)** — UI rendering layer with adapter-owned root, provider, optimistic, and error-boundary conventions
 
 ---
