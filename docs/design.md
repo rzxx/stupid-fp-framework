@@ -11,14 +11,14 @@ For the full design context, start with [docs/design/README.md](design/README.md
 
 - Read [model.md](design/model.md) first for the thesis, intended fit, and core vocabulary.
 - Read [developer-experience.md](design/developer-experience.md) when working on API shape, examples, and ergonomics.
-- Read [runtime.md](design/runtime.md) when working on the Bun host, stream, React adapter, RSC/Flight boundary, or architecture flow.
+- Read [runtime.md](design/runtime.md) when working on the Vite host, stream, React adapter, RSC/Flight boundary, or architecture flow.
 - Read [experiments.md](design/experiments.md) when planning prototypes, scope, risks, and open questions.
 
 The first vertical-slice implementation boundary is locked in [docs/prototype-plan.md](prototype-plan.md).
 
 The current implemented pivot is recorded in [docs/stage-8-record.md](stage-8-record.md). The
 review that drove it is [docs/framework-state-review-5.md](framework-state-review-5.md). The
-the direction review for patch protocol, routing/layouts, Bun-native dev DX, and API syntax is
+the direction review for patch protocol, routing/layouts, host DX, and API syntax is
 [docs/framework-state-review-6.md](framework-state-review-6.md). The implementation record for
 that work is [docs/stage-9-record.md](stage-9-record.md). The current semantic hardening record for
 program-owned state, renderer-owned state, resource cache scopes, and trace-first positioning is

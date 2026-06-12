@@ -30,23 +30,24 @@ custom permission context. Base-key invalidation should refresh all observed sco
 exact-scope invalidation is a later optimization.
 
 The kernel should be able to restore a view checkpoint and process an input without depending on
-process memory. Bun is the first host adapter, not the whole runtime model.
+process memory. Vite is the app host, Node is the default runtime adapter, and other runtimes should
+remain adapter-shaped rather than framework-core assumptions.
 
 ## Files
 
 - [model.md](model.md): thesis, intended fit, and core vocabulary. This is the default context file for any agent.
 - [developer-experience.md](developer-experience.md): developer mental model, workflow feature shape, and illustrative TypeScript API sketches.
-- [runtime.md](runtime.md): runtime architecture, runtime flows, Bun host, custom stream, React adapter, RSC/Flight relationship, and renderer-agnostic pressure.
+- [runtime.md](runtime.md): runtime architecture, runtime flows, Vite host, custom stream, React adapter, RSC/Flight relationship, and renderer-agnostic pressure.
 - [experiments.md](experiments.md): experiment phases, design tensions, non-goals, open questions, acceptance criteria, and next planning step.
 - [../prototype-plan.md](../prototype-plan.md): concrete boundary for the first Bun + React deployment-approval vertical slice.
 - [../kernel-hardening-plan.md](../kernel-hardening-plan.md): historical Stage 6 hardening scope.
 - [../framework-state-review-3.md](../framework-state-review-3.md): Stage 6 audit and decision record for Effect-native services, API, plugins, persistence, and adapter boundaries.
 - [../framework-state-review-5.md](../framework-state-review-5.md): Stage 8 pivot review for invocation contracts, client recovery, scoped observations, and adapter protocol.
-- [../framework-state-review-6.md](../framework-state-review-6.md): review for patch protocol, routing/layouts, Bun-native dev DX, API syntax, and state placement rules.
+- [../framework-state-review-6.md](../framework-state-review-6.md): historical review for patch protocol, routing/layouts, Bun-native dev DX, API syntax, and state placement rules.
 - [../framework-state-review-7.md](../framework-state-review-7.md): Stage 10 semantic hardening for program/renderer state ownership, resource cache scopes, and trace-first positioning.
 - [../framework-state-review-8.md](../framework-state-review-8.md): modular adoption direction for subpath exports, Promise-first APIs, and trace/resource/store standalone usage.
 - [../stage-8-record.md](../stage-8-record.md): implementation record for invocation, recovery, scoped observation, and adapter contracts.
-- [../stage-9-record.md](../stage-9-record.md): implementation record for Review 6 patch, routing, Bun asset, and builder API work.
+- [../stage-9-record.md](../stage-9-record.md): implementation record for Review 6 patch, routing, asset, and builder API work.
 
 ## How To Use This Set
 

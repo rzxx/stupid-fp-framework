@@ -10,7 +10,8 @@ At one level down, the framework is a set of cooperating parts.
 flowchart LR
   Browser["Browser + React Adapter"]
   Stream["Framework Stream"]
-  Bun["Bun Host"]
+  Host["Vite Program Host"]
+  Node["Node Runtime Adapter"]
   Runtime["Server Program Runtime"]
   Actions["Action / Effect Executor"]
   Resources["Resource Graph"]
@@ -19,8 +20,9 @@ flowchart LR
   Durable["Durable State"]
 
   Browser <--> Stream
-  Stream <--> Bun
-  Bun <--> Runtime
+  Stream <--> Host
+  Host <--> Node
+  Host <--> Runtime
   Runtime <--> Actions
   Runtime <--> Resources
   Runtime <--> Views
@@ -32,23 +34,31 @@ flowchart LR
   Views --> Trace
 ```
 
-### Bun Host And Client Pipeline
+### Vite Program Host
 
-The Bun host is the first server runtime target. The browser client pipeline can be Bun-built for
-small fixtures, but the current default demo path uses Vite for browser modules, CSS, React Refresh,
-and React Compiler integration.
+The Vite program host is the canonical local host. Vite owns browser modules, CSS, React Refresh,
+React Compiler integration, SSR transforms, environment handling, dev middleware, app builds, and
+production manifests. Node is the default concrete server runtime target, while other runtimes
+should be expressed as adapters.
+
+Application entry metadata lives in `vite.config.ts` through `stupidFp()`. Vite dev middleware owns
+local requests, and `vite build --app` emits both the browser bundle and a runnable Node production
+server entry.
 
 Responsibilities:
 
-- serve the development shell
-- provide request and socket entrypoints
-- load the server program
+- serve the Vite HTML template through Vite middleware in development and Vite client output in
+  production
+- inject the framework client entry through Vite HTML transforms
+- provide request and socket entrypoints through runtime adapters
+- load the server program through a Vite virtual server entry and ModuleRunner in development
 - host the custom stream transport
-- integrate with a client asset pipeline such as Vite without moving program runtime ownership into the client dev server
-- keep Bun-native asset hooks available for low-level fixtures and custom style build outputs
+- integrate Vite client and server builds without moving program runtime ownership into React
 - provide the first local development story
 
-Bun should be treated as the practical host, not the whole architecture. The model should still be shaped by serverless constraints: processes can die, memory can disappear, and reconnect should be expected.
+The concrete server runtime should be treated as a deployment adapter, not the framework
+architecture. The model should still be shaped by serverless constraints: processes can die, memory
+can disappear, and reconnect should be expected.
 
 ### Server Program Runtime
 
@@ -191,7 +201,7 @@ The smallest useful trace is probably a structured list of events per input. It 
 ### Initial Connection
 
 ```txt
-1. Bun serves a minimal app shell.
+1. Vite and the selected runtime adapter serve a minimal app shell.
 2. The React adapter opens a framework stream.
 3. The browser sends route, client identity, and optional resume cursor.
 4. The server program creates or resumes a view.

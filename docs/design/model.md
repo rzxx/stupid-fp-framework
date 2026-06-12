@@ -277,7 +277,7 @@ An `Adapter` connects the framework kernel to a host or renderer.
 
 Examples:
 
-- Bun host adapter
+- Vite program host adapter
 - React web adapter
 - future React Flight adapter
 - possible React Native adapter

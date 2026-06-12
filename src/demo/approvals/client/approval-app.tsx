@@ -1,12 +1,24 @@
 import { useMemo, useState } from "react";
 import {
   ProgramStreamProvider,
+  createProjectionPatchApplier,
   useProgramStreamState,
   type ProgramStreamReactOptions,
 } from "../../../adapters/react";
 import type { ProgramStreamBootstrap } from "../../../stream";
 import type { TraceSnapshot } from "../../../trace";
+import { approvalProjectionPatchManifest } from "../projection";
 import type { ApprovalClientInput, ApprovalProjection } from "../types";
+
+const applyApprovalProjectionPatch = createProjectionPatchApplier<ApprovalProjection>(
+  approvalProjectionPatchManifest,
+);
+const timeFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  timeZone: "UTC",
+});
 
 export function ApprovalApp(props: {
   bootstrap?: ProgramStreamBootstrap<ApprovalProjection, TraceSnapshot>;
@@ -20,6 +32,7 @@ export function ApprovalApp(props: {
       storageKey: "approval-stream",
       bootstrap: props.bootstrap,
       projectionTraces: (projection) => projection.traces,
+      applyPatch: applyApprovalProjectionPatch,
       router: { mode: "history" },
     };
   }, [props.bootstrap]);
@@ -46,14 +59,14 @@ function ApprovalWorkspace() {
   const selectedIsPending = projection?.selectedDeployment?.status === "pending";
 
   return (
-    <main className="app-shell">
+    <main className="app-shell antialiased">
       <header className="top-bar">
         <div>
           <p className="eyebrow">Durable server program prototype</p>
           <h1>Deployment approvals</h1>
         </div>
         {projection ? (
-          <nav className="primary-nav" aria-label="Approval views">
+          <nav className="primary-nav shadow-sm" aria-label="Approval views">
             <button
               data-active={projection.page === "deployments"}
               onClick={() => stream.navigate(projection.navigation.deploymentsPath)}
@@ -211,7 +224,7 @@ function DeploymentList(props: {
   );
 
   return (
-    <section className="panel list-panel">
+    <section className="panel list-panel shadow-xs">
       <div className="panel-header">
         <h2>{props.projection.team.name} pending deploys</h2>
         <span>{props.projection.pendingDeployments.length}</span>
@@ -255,7 +268,7 @@ function DetailPanel(props: {
   const deployment = props.projection.selectedDeployment;
 
   return (
-    <section className="panel detail-panel">
+    <section className="panel detail-panel shadow-xs">
       <div className="panel-header">
         <h2>Selected deployment</h2>
       </div>
@@ -297,7 +310,7 @@ function DetailPanel(props: {
 
 function RunPanel(props: { compact?: boolean; projection: ApprovalProjection }) {
   return (
-    <section className={`panel run-panel${props.compact ? " compact" : ""}`}>
+    <section className={`panel run-panel shadow-xs${props.compact ? " compact" : ""}`}>
       <div className="panel-header">
         <h2>Live deployment runs</h2>
         <span>{props.projection.activeRuns.length}</span>
@@ -328,7 +341,7 @@ function TracePanel(props: {
   const traces = useMemo(() => props.traces.slice(0, 5), [props.traces]);
 
   return (
-    <section className="panel trace-panel">
+    <section className="panel trace-panel shadow-xs">
       <div className="panel-header">
         <h2>Trace</h2>
         <button className="secondary-action" onClick={props.onToggle} type="button">
@@ -363,9 +376,5 @@ function TracePanel(props: {
 }
 
 function formatTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
+  return timeFormatter.format(new Date(value));
 }

@@ -3,8 +3,8 @@
 ## Goal
 
 Implement the Review 6 direction: make projection patches screen-owned, add real route transition
-support, keep Bun-native development canonical with asset hooks, converge the public API on named
-builders, and document state placement rules.
+support, improve the then-current host asset story, converge the public API on named builders, and
+document state placement rules.
 
 ## Decisions Implemented
 
@@ -19,9 +19,9 @@ builders, and document state placement rules.
 - Expanded the approval demo to two screens: deployments and deployment runs.
 - Added a lightweight layout declaration and shared layout projection region for team, current
   user, navigation, and trace panel state.
-- Added Bun-native style asset hooks with output routes, watch roots, custom build functions, and a
-  dev status endpoint.
-- Migrated the demo server from legacy `stylesPath` to the asset hook path.
+- Added host style asset hooks with output routes, watch roots, custom build functions, and a dev
+  status endpoint. This was later superseded by the Vite host migration.
+- Migrated the demo server from legacy `stylesPath` to the then-current asset hook path.
 - Added named builder APIs for `Resource`, `UIState`, `Screen`, and `Program`.
 - Migrated the approval demo to the named builder APIs.
 - Kept in-flight action recovery explicitly unsupported: the React adapter clears pending action

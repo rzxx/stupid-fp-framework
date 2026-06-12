@@ -43,7 +43,7 @@ A server message can produce a streamed UI patch without traditional SSR or API 
 
 Build:
 
-- Bun-hosted app shell
+- Vite-hosted app shell
 - simple browser-to-server stream
 - simple server-to-browser patch format
 - one interactive screen where a message changes server state and streams a patch
@@ -170,7 +170,7 @@ Pivot questions:
 
 - Do we need event sourcing, snapshots, or both?
 - What is the minimum resume story that proves serverless viability?
-- Which host assumptions are Bun-specific and which are portable?
+- Which host assumptions are runtime-adapter-specific and which are portable?
 
 ### Phase 7: Causal Trace Viewer
 
@@ -334,10 +334,10 @@ These things may become integrations or later conveniences. They are not the cor
 - How should action errors, validation failures, authorization failures, and retries appear in traces and UI?
 - What optimistic UI model fits server-owned programs?
 
-### Bun And Tooling
+### Host And Tooling
 
-- What is the minimum Bun-native integration needed before this feels like a framework?
-- How much can be plain TypeScript library code before a Bun plugin or compiler transform is needed?
+- What is the minimum Vite host integration needed before this feels like a framework?
+- How much can be plain TypeScript library code before a Vite plugin or compiler transform is needed?
 - Which boundaries require build-time knowledge: client islands, server-only code, resource manifests, action registries, or route manifests?
 
 ### React Ecosystem
