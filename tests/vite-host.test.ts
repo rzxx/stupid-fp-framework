@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createBuilder, createServer, type ViteDevServer } from "vite";
 import WebSocket from "ws";
-import { buildViteProgram, serveViteProgram } from "../src/vite";
 import type { ClientEnvelope, ServerEnvelope } from "../src/framework";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -16,15 +17,20 @@ type QueuedSocket = WebSocket & {
   pendingEnvelopes: ServerEnvelope<TestProjection, TestTrace>[];
   envelopeWaiters: ((envelope: ServerEnvelope<TestProjection, TestTrace>) => boolean)[];
 };
+type RunningProgramServer = {
+  port: number;
+  stop: (closeActiveConnections?: boolean) => void;
+};
+type HtmlBootstrap = {
+  viewId: string;
+  projectionVersion: number;
+  projection: TestProjection;
+};
 
-describe("Vite host stream delivery", () => {
-  test("delivers returned envelopes to every connected view they target", async () => {
+describe("Vite-native program host", () => {
+  test("delivers returned stream envelopes to every connected view they target", async () => {
     const root = await createHostFixture();
-    const server = await serveViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      port: 0,
-    });
-
+    const server = await startViteDevServer(root);
     const first = await openSocket(server.port);
     const second = await openSocket(server.port);
 
@@ -75,43 +81,40 @@ describe("Vite host stream delivery", () => {
     } finally {
       first.close();
       second.close();
-      server.stop(true);
+      await server.close();
     }
   });
 
-  test("renders an initial HTML snapshot with stream bootstrap state", async () => {
+  test("renders an initial HTML snapshot through Vite dev middleware", async () => {
     const root = await createHostFixture();
-    const server = await serveViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      port: 0,
-    });
+    const server = await startViteDevServer(root);
 
     try {
       const response = await fetch(`http://localhost:${server.port}/test?id=initial`);
       const html = await response.text();
+      const bootstrap = parseBootstrap(html);
 
       expect(response.headers.get("content-type")).toContain("text/html");
-      expect(html).toContain('<div id="root"><main data-view="view-initial">0</main></div>');
-      expect(html).toContain("window.__STUPID_FP_BOOTSTRAP__=");
-      expect(html).toContain('"viewId":"view-initial"');
-      expect(html).toContain('"projectionVersion":1');
+      expect(serverRenderedValue(html, "view-initial")).toBe("0");
+      expect(bootstrap).toMatchObject({
+        viewId: "view-initial",
+        projectionVersion: 1,
+        projection: { viewId: "view-initial", value: 0 },
+      });
       expect(html).toContain("/@vite/client");
-      expect(html).toContain("/@id/virtual:stupid-fp/client");
+      await expectHtmlLoadsClientEntry(server.port, html);
     } finally {
-      server.stop(true);
+      await server.close();
     }
   });
 
-  test("serves Vite dev modules and public assets while Bun owns the stream runtime", async () => {
+  test("serves Vite dev modules and public assets", async () => {
     const root = await createHostFixture();
     await mkdir(join(root, "public", ".well-known"), { recursive: true });
     await writeFile(join(root, "public", "favicon.svg"), "<svg>dev</svg>\n");
     await writeFile(join(root, "public", ".well-known", "security"), "contact=dev\n");
 
-    const server = await serveViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      port: 0,
-    });
+    const server = await startViteDevServer(root);
 
     try {
       const htmlResponse = await fetch(`http://localhost:${server.port}/test`);
@@ -122,34 +125,27 @@ describe("Vite host stream delivery", () => {
       const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
 
       expect(html).toContain("/@vite/client");
-      expect(html).toContain("/@id/virtual:stupid-fp/client");
+      await expectHtmlLoadsClientEntry(server.port, html);
       expect(await clientResponse.text()).toContain("vite host test");
       expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
       expect(await faviconResponse.text()).toContain("<svg>dev</svg>");
       expect(await wellKnownResponse.text()).toContain("contact=dev");
       expect(traversalResponse.status).not.toBe(200);
     } finally {
-      server.stop(true);
+      await server.close();
     }
   });
 
-  test("serves production manifest output and public assets after Vite build", async () => {
+  test("builds a runnable Node production server entry", async () => {
     const root = await createHostFixture({
       configSource: (fixtureRoot) => viteConfigSource(fixtureRoot, { htmlTransform: true }),
     });
     await mkdir(join(root, "public", ".well-known"), { recursive: true });
     await writeFile(join(root, "public", "favicon.svg"), "<svg>production</svg>\n");
     await writeFile(join(root, "public", ".well-known", "security"), "contact=production\n");
-    await buildViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      mode: "production",
-    });
+    await buildViteApp(root);
 
-    const server = await serveViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      port: 0,
-      mode: "production",
-    });
+    const server = await startBuiltServer(root);
 
     try {
       const htmlResponse = await fetch(`http://localhost:${server.port}/test`);
@@ -165,13 +161,18 @@ describe("Vite host stream delivery", () => {
       const wellKnownResponse = await fetch(`http://localhost:${server.port}/.well-known/security`);
       const manifestResponse = await fetch(`http://localhost:${server.port}/.vite/manifest.json`);
       const traversalResponse = await fetch(`http://localhost:${server.port}/%2e%2e%2ffavicon.svg`);
+      const bootstrap = parseBootstrap(html);
 
       expect(scriptPath).toMatch(/^\/assets\//);
       expect(html).toContain('data-transformed="true"');
-      expect(html).not.toContain("/@id/virtual:stupid-fp/client");
+      expect(bootstrap).toMatchObject({
+        viewId: "view-initial",
+        projection: { viewId: "view-initial", value: 0 },
+      });
       expect(await scriptResponse.text()).toContain("vite host test");
       expect(faviconResponse.headers.get("content-type")).toContain("image/svg+xml");
       expect(await faviconResponse.text()).toContain("<svg>production</svg>");
+      expect(wellKnownResponse.status).toBe(200);
       expect(await wellKnownResponse.text()).toContain("contact=production");
       expect(manifestResponse.status).not.toBe(200);
       expect(traversalResponse.status).not.toBe(200);
@@ -184,41 +185,59 @@ describe("Vite host stream delivery", () => {
     const root = await createHostFixture({
       serverSource: statefulServerEntrySource(),
     });
-    await buildViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      mode: "production",
-    });
+    await buildViteApp(root);
 
-    const server = await serveViteProgram({
-      configFile: join(root, "vite.config.ts"),
-      port: 0,
-      mode: "production",
-    });
+    const server = await startBuiltServer(root);
 
     try {
       const first = await fetch(`http://localhost:${server.port}/test?id=stateful`);
       const second = await fetch(`http://localhost:${server.port}/test?id=stateful`);
 
-      expect(await first.text()).toContain('<main data-view="view-stateful">1</main>');
-      expect(await second.text()).toContain('<main data-view="view-stateful">2</main>');
+      expect(serverRenderedValue(await first.text(), "view-stateful")).toBe("1");
+      expect(serverRenderedValue(await second.text(), "view-stateful")).toBe("2");
     } finally {
       server.stop(true);
     }
   });
 
-  test("fails clearly when the Vite config omits the framework plugin", async () => {
+  test("runs the generated Node server when executed directly", async () => {
     const root = await createHostFixture();
-    await writeFile(
-      join(root, "vite.config.ts"),
-      `export default { root: ${JSON.stringify(root.replaceAll("\\", "/"))} };`,
-    );
+    await buildViteApp(root);
 
-    await expect(
-      serveViteProgram({
-        configFile: join(root, "vite.config.ts"),
-        port: 0,
-      }),
-    ).rejects.toThrow("Vite config must include exactly one stupidFpVite() plugin");
+    const server = await startAutostartedBuiltServer(root);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/test?id=autostart`);
+      const html = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(parseBootstrap(html)).toMatchObject({
+        viewId: "view-autostart",
+        projection: { value: 0 },
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("reports a clear error when the server entry is missing createProgramHost", async () => {
+    const root = await createHostFixture({
+      serverSource: "export const notAProgramHost = true;\n",
+    });
+    await buildViteApp(root);
+
+    const server = await startBuiltServer(root);
+
+    try {
+      const response = await fetch(`http://localhost:${server.port}/test`);
+
+      expect(response.status).toBe(500);
+      expect(await response.text()).toContain(
+        "Server entry must export createProgramHost(context)",
+      );
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("fails clearly when the Vite config registers duplicate framework plugins", async () => {
@@ -226,39 +245,9 @@ describe("Vite host stream delivery", () => {
       configSource: (fixtureRoot) => viteConfigSource(fixtureRoot, { duplicatePlugin: true }),
     });
 
-    await expect(
-      serveViteProgram({
-        configFile: join(root, "vite.config.ts"),
-        port: 0,
-      }),
-    ).rejects.toThrow("Vite config includes multiple stupidFpVite() plugins");
-  });
-
-  test("generates valid config when html transforms and duplicate plugins are combined", async () => {
-    const root = await createHostFixture({
-      configSource: (fixtureRoot) =>
-        viteConfigSource(fixtureRoot, { duplicatePlugin: true, htmlTransform: true }),
-    });
-
-    await expect(
-      serveViteProgram({
-        configFile: join(root, "vite.config.ts"),
-        port: 0,
-      }),
-    ).rejects.toThrow("Vite config includes multiple stupidFpVite() plugins");
-  });
-
-  test("fails clearly when the server entry does not export createProgramHost", async () => {
-    const root = await createHostFixture({
-      serverSource: "export const notAHost = true;\n",
-    });
-
-    await expect(
-      serveViteProgram({
-        configFile: join(root, "vite.config.ts"),
-        port: 0,
-      }),
-    ).rejects.toThrow("Vite server entry must export createProgramHost(context)");
+    await expect(createServer({ configFile: join(root, "vite.config.ts") })).rejects.toThrow(
+      "Vite config must include exactly one stupidFp() plugin",
+    );
   });
 });
 
@@ -266,6 +255,202 @@ type HostFixtureOptions = {
   serverSource?: string;
   configSource?: string | ((root: string) => string);
 };
+
+type RunningViteServer = {
+  port: number;
+  close: () => Promise<void>;
+};
+
+async function startViteDevServer(root: string): Promise<RunningViteServer> {
+  const server = await createServer({
+    configFile: join(root, "vite.config.ts"),
+    server: {
+      port: 0,
+      strictPort: false,
+    },
+  });
+  await server.listen();
+
+  return {
+    port: serverPort(server),
+    close: () => server.close(),
+  };
+}
+
+async function buildViteApp(root: string): Promise<void> {
+  const builder = await createBuilder({
+    configFile: join(root, "vite.config.ts"),
+    mode: "production",
+  });
+  await builder.buildApp();
+}
+
+async function startBuiltServer(root: string): Promise<RunningProgramServer> {
+  const previousAutostart = process.env.STUPID_FP_AUTOSTART;
+
+  process.env.STUPID_FP_AUTOSTART = "false";
+
+  try {
+    const mod = (await import(
+      `${pathToFileURL(join(root, "dist", "server", "index.js")).href}?t=${crypto.randomUUID()}`
+    )) as {
+      start: (options: { port: number }) => Promise<RunningProgramServer>;
+    };
+
+    return mod.start({ port: 0 });
+  } finally {
+    if (previousAutostart === undefined) {
+      delete process.env.STUPID_FP_AUTOSTART;
+    } else {
+      process.env.STUPID_FP_AUTOSTART = previousAutostart;
+    }
+  }
+}
+
+async function startAutostartedBuiltServer(root: string): Promise<RunningProgramServer> {
+  const { STUPID_FP_AUTOSTART: _autostart, ...env } = process.env;
+  const child = spawn(process.execPath, [join(root, "dist", "server", "index.js")], {
+    cwd: root,
+    env: {
+      ...env,
+      HOST: "127.0.0.1",
+      PORT: "0",
+    },
+  });
+
+  const port = await waitForAutostartedPort(child);
+
+  return {
+    port,
+    stop() {
+      if (!child.killed) {
+        child.kill();
+      }
+    },
+  };
+}
+
+function waitForAutostartedPort(child: ChildProcessWithoutNullStreams): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      fail(new Error(`Timed out waiting for generated server to listen\n${stderr}`));
+    }, 5000);
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const succeed = (port: number) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      resolve(port);
+    };
+    const fail = (error: Error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      child.kill();
+      reject(error);
+    };
+    const onStdout = (chunk: Buffer) => {
+      const match = chunk.toString("utf8").match(/http:\/\/[^:]+:(\d+)/);
+
+      if (match?.[1]) {
+        succeed(Number(match[1]));
+      }
+    };
+    const onStderr = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    };
+    const onError = (error: Error) => fail(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      fail(
+        new Error(
+          `Generated server exited before listening: code=${code} signal=${signal}\n${stderr}`,
+        ),
+      );
+    };
+
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+function serverPort(server: ViteDevServer): number {
+  const address = server.httpServer?.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Expected Vite dev server to bind a TCP port");
+  }
+
+  return address.port;
+}
+
+function parseBootstrap(html: string): HtmlBootstrap {
+  const match = html.match(/window\.__STUPID_FP_BOOTSTRAP__=(.*?);<\/script>/);
+
+  if (!match?.[1]) {
+    throw new Error("Expected HTML to include the framework bootstrap payload");
+  }
+
+  return JSON.parse(match[1]) as HtmlBootstrap;
+}
+
+function serverRenderedValue(html: string, viewId: string): string {
+  const match = html.match(
+    new RegExp(`<main\\b[^>]*data-view="${escapeRegExp(viewId)}"[^>]*>([^<]*)<\\/main>`),
+  );
+
+  if (!match?.[1]) {
+    throw new Error(`Expected HTML to include a server-rendered view for ${viewId}`);
+  }
+
+  return match[1];
+}
+
+async function expectHtmlLoadsClientEntry(port: number, html: string): Promise<void> {
+  const scripts = Array.from(
+    html.matchAll(/<script\b[^>]*type="module"[^>]*src="([^"]+)"/g),
+    (match) => match[1],
+  ).filter((src) => src && !src.includes("/@vite/client"));
+
+  expect(scripts.length).toBeGreaterThan(0);
+
+  const modules = await Promise.all(
+    scripts.map(async (src) => {
+      const response = await fetch(localUrl(port, src));
+
+      expect(response.status).toBe(200);
+      return response.text();
+    }),
+  );
+
+  expect(
+    modules.some((source) => source.includes("vite host test") || source.includes("/client.ts")),
+  ).toBe(true);
+}
+
+function localUrl(port: number, path: string): string {
+  return new URL(path, `http://localhost:${port}`).href;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 async function createHostFixture(options: HostFixtureOptions = {}): Promise<string> {
   const root = join(tmpdir(), `stupid-fp-vite-host-${crypto.randomUUID()}`);
@@ -287,7 +472,7 @@ function viteConfigSource(
   options?: { duplicatePlugin?: boolean; htmlTransform?: boolean },
 ): string {
   const plugin = `
-    stupidFpVite({
+    stupidFp({
       template: "index.html",
       client: "client.ts",
       server: "server.ts",
@@ -306,7 +491,7 @@ function viteConfigSource(
   ].join(",");
 
   return `
-import { stupidFpVite } from ${JSON.stringify(relativeImport(root, "src/vite.ts"))};
+import { stupidFp } from ${JSON.stringify(relativeImport(root, "src/vite.ts"))};
 
 export default {
   root: ${JSON.stringify(root.replaceAll("\\", "/"))},

@@ -41,9 +41,9 @@ React Compiler integration, SSR transforms, environment handling, dev middleware
 production manifests. Node is the default concrete server runtime target, while other runtimes
 should be expressed as adapters.
 
-Application entry metadata lives in `vite.config.ts` through `stupidFp()`. Compatibility helpers
-such as `serveViteProgram()` and `buildViteProgram()` still resolve that config instead of accepting
-duplicated template/client/server entry paths.
+Application entry metadata lives in `vite.config.ts` through `stupidFp()`. Vite dev middleware owns
+local requests, and `vite build --app` emits both the browser bundle and a runnable Node production
+server entry.
 
 Responsibilities:
 

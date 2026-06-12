@@ -3,11 +3,11 @@ import type { TraceSnapshot } from "../../trace";
 import { createApprovalRuntime } from "./program";
 import type { ApprovalClientInput, ApprovalProjection } from "./types";
 import { renderApprovalApp } from "./client/render-approval";
-import type { ViteProgramServerContext, ViteProgramHost } from "../../vite";
+import type { ProgramHost, ProgramServerContext } from "../../node";
 
 export function createProgramHost(
-  context: ViteProgramServerContext,
-): ViteProgramHost<ApprovalClientInput, ApprovalProjection, TraceSnapshot> {
+  context: ProgramServerContext,
+): ProgramHost<ApprovalClientInput, ApprovalProjection, TraceSnapshot> {
   const runtimeStorePath = context.env.RUNTIME_STORE_PATH;
 
   return {

@@ -1,124 +1,81 @@
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
-import { WebSocketServer, type WebSocket, type RawData } from "ws";
-import type {
-  Connect,
-  HtmlTagDescriptor,
-  Plugin,
-  PluginOption,
-  ResolvedConfig,
-  ViteDevServer,
-} from "vite";
+import { WebSocketServer } from "ws";
+import type { HtmlTagDescriptor, Plugin, PluginOption, ViteDevServer } from "vite";
 import {
-  parseClientEnvelope,
-  type ClientEnvelope,
-  type ConnectedEnvelope,
-  type ProgramStreamBootstrap,
-  type ProjectionEnvelope,
-  type ServerEnvelope,
-  type TraceEnvelope,
+  createProgramHostFromEntry,
+  nodeRequestToRequest,
+  sendNodeResponse,
+  type ProgramHost,
+  type ProgramRenderContext,
+  type ProgramRoute,
+  type ProgramRuntime,
+  type ProgramServerContext,
+  type ProgramServerEntry,
+} from "../node";
+import { parseClientEnvelope } from "../../framework/stream";
+import type {
+  ConnectedEnvelope,
+  ProgramStreamBootstrap,
+  ProjectionEnvelope,
+  ServerEnvelope,
+  TraceEnvelope,
 } from "../../framework/stream";
+
+export type {
+  ProgramHost,
+  ProgramRenderContext,
+  ProgramRoute,
+  ProgramRuntime,
+  ProgramServerContext,
+  ProgramServerEntry,
+};
 
 const pluginName = "stupid-fp-vite";
 const metadataKey = "__stupidFpVite" as const;
 const clientVirtualId = "virtual:stupid-fp/client";
 const serverVirtualId = "virtual:stupid-fp/server";
+const nodeRuntimeVirtualId = "virtual:stupid-fp/node-runtime";
+const nodeServerVirtualId = "virtual:stupid-fp/node-server";
 const resolvedClientVirtualId = `\0${clientVirtualId}`;
 const resolvedServerVirtualId = `\0${serverVirtualId}`;
+const resolvedNodeRuntimeVirtualId = `\0${nodeRuntimeVirtualId}`;
+const resolvedNodeServerVirtualId = `\0${nodeServerVirtualId}`;
 
-export type ViteRuntime<TInput, TProjection, TTrace> = {
-  connect: (
-    envelope: Extract<ClientEnvelope<TInput>, { type: "connect" }>,
-  ) => Promise<{ envelopes: ServerEnvelope<TProjection, TTrace>[] }>;
-  receive: (
-    envelope: Extract<ClientEnvelope<TInput>, { type: "input" }>,
-  ) => Promise<{ envelopes: ServerEnvelope<TProjection, TTrace>[] }>;
-};
-
-export type ViteProgramRoute = {
-  route: string;
-  params: Record<string, string>;
-};
-
-export type ViteProgramHost<TInput, TProjection, TTrace> = {
-  runtime: ViteRuntime<TInput, TProjection, TTrace>;
-  resolve?: (
-    request: Request,
-  ) => ViteProgramRoute | undefined | Promise<ViteProgramRoute | undefined>;
-  render?: (
-    bootstrap: ProgramStreamBootstrap<TProjection, TTrace>,
-    context: ViteProgramRenderContext,
-  ) => string | Promise<string>;
-};
-
-export type ViteProgramRenderContext = {
-  request: Request;
-};
-
-export type ViteProgramServerEntry<TInput, TProjection, TTrace> = {
-  createProgramHost: (
-    context: ViteProgramServerContext,
-  ) =>
-    | ViteProgramHost<TInput, TProjection, TTrace>
-    | Promise<ViteProgramHost<TInput, TProjection, TTrace>>;
-};
-
-export type ViteProgramServerContext = {
-  mode: "development" | "production";
-  env: Record<string, string | undefined>;
-  platform: "node";
-};
-
-export type ViteProgramOptions = {
-  configFile?: string;
-  hostname?: string;
-  port?: number;
-  mode?: "development" | "production";
-};
-
-export type ProgramServer = {
-  readonly port: number;
-  stop(closeActiveConnections?: boolean): void;
-};
-
-export type StupidFpViteOptions = {
+export type StupidFpOptions = {
   template?: string;
   client?: string;
   server?: string;
   reactCompiler?: boolean;
 };
 
-type StupidFpViteMetadata = {
+type RequiredPluginOptions = Required<Pick<StupidFpOptions, "template" | "client" | "server">> &
+  Pick<StupidFpOptions, "reactCompiler">;
+
+type StupidFpMetadata = {
   root: string;
   template: string;
   client: string;
   server: string;
   clientImportPath: string;
   serverImportPath: string;
+  nodeRuntimePath: string;
   clientVirtualId: string;
   serverVirtualId: string;
+  nodeServerVirtualId: string;
 };
 
-type StupidFpVitePlugin = Plugin & {
-  [metadataKey]?: StupidFpViteMetadata;
+type StupidFpPlugin = Plugin & {
+  [metadataKey]?: StupidFpMetadata;
 };
 
-export function stupidFp(options: StupidFpViteOptions = {}): PluginOption[] {
-  return stupidFpVite(options);
-}
-
-export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] {
+export function stupidFp(options: StupidFpOptions = {}): PluginOption[] {
   const resolvedOptions = resolvePluginOptions(options);
 
-  const frameworkPlugin: StupidFpVitePlugin = {
+  const frameworkPlugin: StupidFpPlugin = {
     name: pluginName,
     config() {
       return {
@@ -144,9 +101,9 @@ export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] 
               emptyOutDir: true,
               ssr: true,
               rolldownOptions: {
-                input: serverVirtualId,
+                input: nodeServerVirtualId,
                 output: {
-                  entryFileNames: "entry-server.js",
+                  entryFileNames: "index.js",
                 },
               },
             },
@@ -158,108 +115,16 @@ export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] 
       };
     },
     configResolved(config) {
-      frameworkPlugin[metadataKey] = resolvePluginMetadata(config, resolvedOptions);
+      const frameworkPlugins = config.plugins.filter((plugin) => plugin.name === pluginName);
+
+      if (frameworkPlugins.length !== 1) {
+        throw new Error("Vite config must include exactly one stupidFp() plugin");
+      }
+
+      frameworkPlugin[metadataKey] = resolvePluginMetadata(config.root, resolvedOptions);
     },
     configureServer(server) {
-      const delivery = new SocketDelivery<unknown, unknown>();
-      const socketServer = new WebSocketServer({ noServer: true });
-      let programPromise: Promise<PreparedProgram<unknown, unknown, unknown>> | null = null;
-
-      function loadProgram() {
-        programPromise ??= prepareDevelopmentProgramFromServer(server, frameworkPluginMetadata());
-        return programPromise;
-      }
-
-      function frameworkPluginMetadata(): StupidFpViteMetadata {
-        const metadata = frameworkPlugin[metadataKey];
-
-        if (!metadata) {
-          throw new Error("stupidFpVite() plugin did not resolve its app metadata");
-        }
-
-        return metadata;
-      }
-
-      server.httpServer?.on("upgrade", (request, socket, head) => {
-        const url = request.url ? new URL(request.url, requestUrlOrigin(request)) : null;
-
-        if (url?.pathname !== "/stream") {
-          return;
-        }
-
-        socketServer.handleUpgrade(request, socket, head, (socket) => {
-          socketServer.emit("connection", socket, request);
-        });
-      });
-
-      socketServer.on("connection", (socket) => {
-        socket.on("message", async (payload) => {
-          const program = await loadProgram();
-          const host = await program.loadHost();
-          const parsed = parseClientEnvelope<unknown>(rawSocketPayload(payload));
-
-          if (parsed.type === "error") {
-            socket.send(JSON.stringify(parsed));
-            return;
-          }
-
-          const result =
-            parsed.type === "connect"
-              ? await host.runtime.connect(parsed)
-              : await host.runtime.receive(parsed);
-
-          delivery.send(socket, result.envelopes);
-        });
-
-        socket.on("close", () => {
-          delivery.close(socket);
-        });
-      });
-
-      server.httpServer?.on("close", () => {
-        socketServer.close();
-        void programPromise?.then((program) => program.close());
-      });
-
-      return () => {
-        server.middlewares.use(async (nodeRequest, nodeResponse, next) => {
-          if (!nodeRequest.url) {
-            next();
-            return;
-          }
-
-          const request = nodeRequestToRequest(nodeRequest);
-          const url = new URL(request.url);
-
-          if (url.pathname === "/stream") {
-            await sendNodeResponse(
-              nodeResponse,
-              new Response("WebSocket upgrade required", { status: 400 }),
-            );
-            return;
-          }
-
-          if (hasUnsafePathSegment(url.pathname)) {
-            await sendNodeResponse(nodeResponse, new Response("Bad request", { status: 400 }));
-            return;
-          }
-
-          if (url.pathname.startsWith("/.vite/")) {
-            await sendNodeResponse(nodeResponse, new Response("Not found", { status: 404 }));
-            return;
-          }
-
-          const publicAsset = await serveViteFile(server.config.publicDir, request);
-
-          if (publicAsset) {
-            await sendNodeResponse(nodeResponse, publicAsset);
-            return;
-          }
-
-          const program = await loadProgram();
-          await sendNodeResponse(nodeResponse, await renderProgramRequest(program, request));
-        });
-      };
+      return configureFrameworkDevServer(server, () => frameworkPluginMetadata(frameworkPlugin));
     },
     resolveId(source) {
       if (source === clientVirtualId) {
@@ -268,6 +133,14 @@ export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] 
 
       if (source === serverVirtualId) {
         return resolvedServerVirtualId;
+      }
+
+      if (source === nodeRuntimeVirtualId) {
+        return resolvedNodeRuntimeVirtualId;
+      }
+
+      if (source === nodeServerVirtualId) {
+        return resolvedNodeServerVirtualId;
       }
 
       return null;
@@ -285,6 +158,14 @@ export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] 
 
       if (id === resolvedServerVirtualId) {
         return `export * from ${JSON.stringify(metadata.serverImportPath)};`;
+      }
+
+      if (id === resolvedNodeRuntimeVirtualId) {
+        return `export * from ${JSON.stringify(pathToFileURL(metadata.nodeRuntimePath).href)};`;
+      }
+
+      if (id === resolvedNodeServerVirtualId) {
+        return nodeServerEntrySource(metadata);
       }
 
       return null;
@@ -306,12 +187,8 @@ export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] 
       ];
     },
     async buildApp(builder) {
-      const metadata = frameworkPlugin[metadataKey] ?? findStupidFpViteMetadata(builder.config);
-      const outDir = resolvedOutDir(builder.config);
-
       await builder.build(builder.environments.client);
       await builder.build(builder.environments.ssr);
-      await writeProductionServerEntrypoint(outDir, metadata);
     },
   };
   const plugins: PluginOption[] = [frameworkPlugin, ...react()];
@@ -323,121 +200,23 @@ export function stupidFpVite(options: StupidFpViteOptions = {}): PluginOption[] 
   return plugins;
 }
 
-export async function buildViteProgram(
-  options: Omit<ViteProgramOptions, "port"> = {},
-): Promise<void> {
-  const previousNodeEnv = process.env.NODE_ENV;
-  const { vite, app, config } = await resolveViteProgramConfig("build", {
-    ...options,
-    mode: options.mode ?? "production",
-  });
-  const outDir = resolvedOutDir(config);
-  const clientOutDir = join(outDir, "client");
-  const serverOutDir = join(outDir, "server");
-
-  if (!previousNodeEnv) {
-    process.env.NODE_ENV = "production";
-  }
-
-  try {
-    await vite.build({
-      configFile: config.configFile,
-      mode: options.mode ?? "production",
-      appType: "custom",
-      build: {
-        outDir: clientOutDir,
-        emptyOutDir: true,
-        manifest: true,
-        rolldownOptions: {
-          input: [app.template, app.clientVirtualId],
-        },
-      },
-    });
-
-    await vite.build({
-      configFile: config.configFile,
-      mode: options.mode ?? "production",
-      appType: "custom",
-      build: {
-        outDir: serverOutDir,
-        emptyOutDir: true,
-        ssr: true,
-        rolldownOptions: {
-          input: app.serverVirtualId,
-          output: {
-            entryFileNames: "entry-server.js",
-          },
-        },
-      },
-    });
-  } finally {
-    if (previousNodeEnv === undefined) {
-      delete process.env.NODE_ENV;
-    } else {
-      process.env.NODE_ENV = previousNodeEnv;
-    }
-  }
-}
-
-export async function serveViteProgram<TInput, TProjection, TTrace>(
-  options: ViteProgramOptions = {},
-): Promise<ProgramServer> {
-  const mode = options.mode ?? "development";
-  const delivery = new SocketDelivery<TProjection, TTrace>();
-  const resolved = await resolveViteProgramConfig(mode === "production" ? "build" : "serve", {
-    ...options,
-    mode,
-  });
-  const outDir = resolvedOutDir(resolved.config);
-  const program = await prepareProgram<TInput, TProjection, TTrace>(resolved, outDir, mode);
+function configureFrameworkDevServer(
+  server: ViteDevServer,
+  metadata: () => StupidFpMetadata,
+): () => void {
+  const delivery = new SocketDelivery<unknown, unknown>();
   const socketServer = new WebSocketServer({ noServer: true });
-  const httpServer = createHttpServer(async (nodeRequest, nodeResponse) => {
-    try {
-      const request = nodeRequestToRequest(nodeRequest);
-      const url = new URL(request.url);
+  let programPromise: Promise<PreparedDevProgram<unknown, unknown, unknown>> | null = null;
 
-      if (hasUnsafePathSegment(url.pathname)) {
-        await sendNodeResponse(nodeResponse, new Response("Bad request", { status: 400 }));
-        return;
-      }
+  function loadProgram() {
+    programPromise ??= prepareDevProgram(server, metadata());
+    return programPromise;
+  }
 
-      if (url.pathname.startsWith("/.vite/")) {
-        await sendNodeResponse(nodeResponse, new Response("Not found", { status: 404 }));
-        return;
-      }
-
-      if (url.pathname === "/stream") {
-        await sendNodeResponse(
-          nodeResponse,
-          new Response("WebSocket upgrade required", { status: 400 }),
-        );
-        return;
-      }
-
-      if (await program.serveNodeRequest?.(nodeRequest, nodeResponse)) {
-        return;
-      }
-
-      const asset = await program.serveAsset(request);
-
-      if (asset) {
-        await sendNodeResponse(nodeResponse, asset);
-        return;
-      }
-
-      await sendNodeResponse(nodeResponse, await renderProgramRequest(program, request));
-    } catch (error) {
-      await program.close();
-      nodeResponse.statusCode = 500;
-      nodeResponse.end(error instanceof Error ? error.message : "Internal server error");
-    }
-  });
-
-  httpServer.on("upgrade", (request, socket, head) => {
+  server.httpServer?.on("upgrade", (request, socket, head) => {
     const url = request.url ? new URL(request.url, requestUrlOrigin(request)) : null;
 
     if (url?.pathname !== "/stream") {
-      socket.destroy();
       return;
     }
 
@@ -448,8 +227,9 @@ export async function serveViteProgram<TInput, TProjection, TTrace>(
 
   socketServer.on("connection", (socket) => {
     socket.on("message", async (payload) => {
+      const program = await loadProgram();
       const host = await program.loadHost();
-      const parsed = parseClientEnvelope<TInput>(rawSocketPayload(payload));
+      const parsed = parseClientEnvelope<unknown>(rawSocketPayload(payload));
 
       if (parsed.type === "error") {
         socket.send(JSON.stringify(parsed));
@@ -469,158 +249,66 @@ export async function serveViteProgram<TInput, TProjection, TTrace>(
     });
   });
 
-  try {
-    await listen(httpServer, options.port ?? 0, options.hostname);
-  } catch (error) {
-    await program.close();
-    throw error;
-  }
+  server.httpServer?.on("close", () => {
+    socketServer.close();
+    void programPromise?.then((program) => program.close());
+  });
 
-  program.printUrls();
-
-  return {
-    get port() {
-      const address = httpServer.address();
-
-      if (!address || typeof address === "string") {
-        throw new Error("Expected Vite program server to bind a TCP port");
+  return () => {
+    server.middlewares.use(async (nodeRequest, nodeResponse, next) => {
+      if (!nodeRequest.url) {
+        next();
+        return;
       }
 
-      return address.port;
-    },
-    stop(closeActiveConnections?: boolean) {
-      void program.close();
-      socketServer.close();
+      const request = nodeRequestToRequest(nodeRequest);
+      const url = new URL(request.url);
 
-      if (closeActiveConnections) {
-        httpServer.closeAllConnections();
+      if (url.pathname === "/stream") {
+        await sendNodeResponse(
+          nodeResponse,
+          new Response("WebSocket upgrade required", { status: 400 }),
+        );
+        return;
       }
 
-      httpServer.close();
-    },
+      if (hasUnsafePathSegment(url.pathname)) {
+        await sendNodeResponse(nodeResponse, new Response("Bad request", { status: 400 }));
+        return;
+      }
+
+      if (url.pathname.startsWith("/.vite/")) {
+        await sendNodeResponse(nodeResponse, new Response("Not found", { status: 404 }));
+        return;
+      }
+
+      const publicAsset = await serveFile(server.config.publicDir, request);
+
+      if (publicAsset) {
+        await sendNodeResponse(nodeResponse, publicAsset);
+        return;
+      }
+
+      const program = await loadProgram();
+      await sendNodeResponse(nodeResponse, await renderDevRequest(program, request));
+    });
   };
 }
 
-type PreparedProgram<TInput, TProjection, TTrace> = {
-  loadHost: () => Promise<ViteProgramHost<TInput, TProjection, TTrace>>;
-  loadTemplate: (request: Request) => Promise<string>;
+type PreparedDevProgram<TInput, TProjection, TTrace> = {
+  loadHost: () => Promise<ProgramHost<TInput, TProjection, TTrace>>;
+  loadTemplate: () => Promise<string>;
   transformHtml: (request: Request, html: string) => Promise<string>;
-  serveAsset: (request: Request) => Promise<Response | null>;
-  serveNodeRequest?: (request: IncomingMessage, response: ServerResponse) => Promise<boolean>;
-  printUrls: () => void;
   close: () => Promise<void>;
 };
 
-type ResolvedViteProgramConfig = {
-  vite: typeof import("vite");
-  config: ResolvedConfig;
-  app: StupidFpViteMetadata;
-};
-
-type RequiredPluginOptions = Required<Pick<StupidFpViteOptions, "template" | "client" | "server">> &
-  Pick<StupidFpViteOptions, "reactCompiler">;
-
-async function prepareProgram<TInput, TProjection, TTrace>(
-  resolved: ResolvedViteProgramConfig,
-  outDir: string,
-  mode: "development" | "production",
-): Promise<PreparedProgram<TInput, TProjection, TTrace>> {
-  return mode === "production"
-    ? prepareProductionProgram(resolved, outDir)
-    : prepareDevelopmentProgram(resolved);
-}
-
-async function prepareDevelopmentProgram<TInput, TProjection, TTrace>(
-  resolved: ResolvedViteProgramConfig,
-): Promise<PreparedProgram<TInput, TProjection, TTrace>> {
-  const server = await resolved.vite.createServer({
-    configFile: resolved.config.configFile,
-    mode: resolved.config.mode,
-    appType: "custom",
-    clearScreen: false,
-    logLevel: process.env.NODE_ENV === "test" ? "error" : "info",
-    server: {
-      middlewareMode: true,
-      hmr: false,
-      strictPort: false,
-      forwardConsole: true,
-    },
-    environments: {
-      ssr: {
-        dev: {
-          moduleRunnerTransform: true,
-        },
-      },
-    },
-  });
-
-  const runner = resolved.vite.createServerModuleRunner(server.environments.ssr);
-  let cachedHost: ViteProgramHost<TInput, TProjection, TTrace> | null = null;
-
-  server.watcher.on("change", () => {
-    cachedHost = null;
-    runner.clearCache();
-    server.environments.client.hot.send({ type: "full-reload" });
-  });
-
-  const prepared: PreparedProgram<TInput, TProjection, TTrace> = {
-    async loadHost() {
-      if (cachedHost) {
-        return cachedHost;
-      }
-
-      const mod = await runner.import<ViteProgramServerEntry<TInput, TProjection, TTrace>>(
-        resolved.app.serverVirtualId,
-      );
-      cachedHost = await createProgramHostFromModule(mod, "development");
-      return cachedHost;
-    },
-    async loadTemplate() {
-      return readFile(resolved.app.template, "utf8");
-    },
-    async transformHtml(request, html) {
-      return server.transformIndexHtml(new URL(request.url).pathname, html);
-    },
-    async serveAsset() {
-      return null;
-    },
-    async serveNodeRequest(request, response) {
-      const url = request.url ? new URL(request.url, requestUrlOrigin(request)) : null;
-
-      if (
-        !url ||
-        (!isViteAssetPath(url.pathname) &&
-          !(await isPublicAssetRequest(server.config.publicDir, url.pathname)))
-      ) {
-        return false;
-      }
-
-      return serveViteMiddleware(server.middlewares, request, response);
-    },
-    printUrls() {},
-    async close() {
-      await runner.close();
-      await server.close();
-    },
-  };
-
-  try {
-    await prepared.loadHost();
-  } catch (error) {
-    await prepared.close();
-    throw error;
-  }
-
-  return prepared;
-}
-
-async function prepareDevelopmentProgramFromServer<TInput, TProjection, TTrace>(
+async function prepareDevProgram<TInput, TProjection, TTrace>(
   server: ViteDevServer,
-  app: StupidFpViteMetadata,
-): Promise<PreparedProgram<TInput, TProjection, TTrace>> {
+  metadata: StupidFpMetadata,
+): Promise<PreparedDevProgram<TInput, TProjection, TTrace>> {
   const vite = await import("vite");
   const runner = vite.createServerModuleRunner(server.environments.ssr);
-  let cachedHost: ViteProgramHost<TInput, TProjection, TTrace> | null = null;
+  let cachedHost: ProgramHost<TInput, TProjection, TTrace> | null = null;
 
   server.watcher.on("change", () => {
     cachedHost = null;
@@ -628,28 +316,28 @@ async function prepareDevelopmentProgramFromServer<TInput, TProjection, TTrace>(
     server.environments.client.hot.send({ type: "full-reload" });
   });
 
-  const prepared: PreparedProgram<TInput, TProjection, TTrace> = {
+  const prepared: PreparedDevProgram<TInput, TProjection, TTrace> = {
     async loadHost() {
       if (cachedHost) {
         return cachedHost;
       }
 
-      const mod = await runner.import<ViteProgramServerEntry<TInput, TProjection, TTrace>>(
-        app.serverVirtualId,
+      const mod = await runner.import<ProgramServerEntry<TInput, TProjection, TTrace>>(
+        metadata.serverVirtualId,
       );
-      cachedHost = await createProgramHostFromModule(mod, "development");
+      cachedHost = await createProgramHostFromEntry(mod, {
+        mode: "development",
+        env: process.env,
+        platform: "node",
+      });
       return cachedHost;
     },
     async loadTemplate() {
-      return readFile(app.template, "utf8");
+      return readFile(metadata.template, "utf8");
     },
     async transformHtml(request, html) {
       return server.transformIndexHtml(new URL(request.url).pathname, html);
     },
-    async serveAsset() {
-      return null;
-    },
-    printUrls() {},
     async close() {
       await runner.close();
     },
@@ -659,61 +347,13 @@ async function prepareDevelopmentProgramFromServer<TInput, TProjection, TTrace>(
   return prepared;
 }
 
-async function prepareProductionProgram<TInput, TProjection, TTrace>(
-  resolved: ResolvedViteProgramConfig,
-  outDir: string,
-): Promise<PreparedProgram<TInput, TProjection, TTrace>> {
-  const clientOutDir = join(outDir, "client");
-  const serverEntry = join(outDir, "server", "entry-server.js");
-  const manifestPath = join(clientOutDir, ".vite", "manifest.json");
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<
-    string,
-    ViteManifestEntry
-  >;
-  const manifestEntry = resolveManifestEntry(manifest);
-  const templatePath = resolveProductionTemplatePath(clientOutDir, resolved.app, manifest);
-  let productionHostPromise: Promise<ViteProgramHost<TInput, TProjection, TTrace>> | null = null;
-
-  if (!manifestEntry) {
-    throw new Error("Vite client build did not produce a manifest entry");
-  }
-
-  const prepared: PreparedProgram<TInput, TProjection, TTrace> = {
-    async loadHost() {
-      productionHostPromise ??= import(pathToFileURL(serverEntry).href).then((mod) =>
-        createProgramHostFromModule(
-          mod as ViteProgramServerEntry<TInput, TProjection, TTrace>,
-          "production",
-        ),
-      );
-      return productionHostPromise;
-    },
-    async loadTemplate() {
-      return readFile(templatePath, "utf8");
-    },
-    async transformHtml(_request, html) {
-      return injectViteProductionAssets(html, manifest, manifestEntry);
-    },
-    async serveAsset(request) {
-      return serveViteProductionAsset(clientOutDir, request);
-    },
-    printUrls() {},
-    async close() {
-      return undefined;
-    },
-  };
-
-  await prepared.loadHost();
-  return prepared;
-}
-
-async function renderProgramRequest<TInput, TProjection, TTrace>(
-  program: PreparedProgram<TInput, TProjection, TTrace>,
+async function renderDevRequest<TInput, TProjection, TTrace>(
+  program: PreparedDevProgram<TInput, TProjection, TTrace>,
   request: Request,
 ): Promise<Response> {
   const host = await program.loadHost();
   const route = await host.resolve?.(request);
-  const template = await program.loadTemplate(request);
+  const template = await program.loadTemplate();
 
   if (route && host.render) {
     const result = await host.runtime.connect({
@@ -732,68 +372,58 @@ async function renderProgramRequest<TInput, TProjection, TTrace>(
   return htmlResponse(await program.transformHtml(request, template));
 }
 
-function htmlResponse(html: string): Response {
-  return new Response(html, {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+function nodeServerEntrySource(metadata: StupidFpMetadata): string {
+  return `
+import {
+  createNodeProgramHandler,
+  startNodeProgramServer,
+} from ${JSON.stringify(nodeRuntimeVirtualId)};
+import * as entry from ${JSON.stringify(serverVirtualId)};
+
+const baseOptions = {
+  entry,
+  mode: "production",
+  clientOutDir: new URL("../client/", import.meta.url),
+  templatePath: new URL(${JSON.stringify(`../client/${productionTemplatePath(metadata)}`)}, import.meta.url),
+  manifestPath: new URL("../client/.vite/manifest.json", import.meta.url),
+};
+
+export function createHandler(overrides = {}) {
+  return createNodeProgramHandler({ ...baseOptions, ...overrides });
+}
+
+export function start(options = {}) {
+  return startNodeProgramServer({
+    ...baseOptions,
+    hostname: process.env.HOST ?? "localhost",
+    port: Number(process.env.PORT ?? 3000),
+    ...options,
   });
 }
 
-async function createProgramHostFromModule<TInput, TProjection, TTrace>(
-  mod: Partial<ViteProgramServerEntry<TInput, TProjection, TTrace>>,
-  mode: "development" | "production",
-): Promise<ViteProgramHost<TInput, TProjection, TTrace>> {
-  if (typeof mod.createProgramHost !== "function") {
-    throw new Error("Vite server entry must export createProgramHost(context)");
-  }
-
-  return mod.createProgramHost({ mode, env: process.env, platform: "node" });
+if (process.env.STUPID_FP_AUTOSTART !== "false") {
+  const server = await start();
+  const hostname = process.env.HOST ?? "localhost";
+  console.log(\`stupid-fp server running at http://\${hostname}:\${server.port}\`);
+}
+`;
 }
 
-async function resolveViteProgramConfig(
-  command: "build" | "serve",
-  options: Omit<ViteProgramOptions, "port">,
-): Promise<ResolvedViteProgramConfig> {
-  const vite = await import("vite");
-  const mode =
-    options.mode ?? (command === "build" ? ("production" as const) : ("development" as const));
-  const config = await vite.resolveConfig(
-    {
-      configFile: options.configFile,
-      mode,
-    },
-    command,
-    mode,
-  );
-  const app = findStupidFpViteMetadata(config);
-
-  return { vite, config, app };
+function productionTemplatePath(metadata: StupidFpMetadata): string {
+  return relative(metadata.root, metadata.template).replaceAll(sep, "/");
 }
 
-function findStupidFpViteMetadata(config: ResolvedConfig): StupidFpViteMetadata {
-  const plugins = config.plugins.filter(isStupidFpVitePlugin);
-
-  if (plugins.length === 0) {
-    throw new Error("Vite config must include exactly one stupidFpVite() plugin");
-  }
-
-  if (plugins.length > 1) {
-    throw new Error("Vite config includes multiple stupidFpVite() plugins");
-  }
-
-  const metadata = plugins[0]?.[metadataKey];
+function frameworkPluginMetadata(plugin: StupidFpPlugin): StupidFpMetadata {
+  const metadata = plugin[metadataKey];
 
   if (!metadata) {
-    throw new Error("stupidFpVite() plugin did not resolve its app metadata");
+    throw new Error("stupidFp() plugin did not resolve its app metadata");
   }
 
   return metadata;
 }
 
-function isStupidFpVitePlugin(plugin: Plugin): plugin is StupidFpVitePlugin {
-  return plugin.name === pluginName;
-}
-
-function resolvePluginOptions(options: StupidFpViteOptions): RequiredPluginOptions {
+function resolvePluginOptions(options: StupidFpOptions): RequiredPluginOptions {
   return {
     template: options.template ?? "src/app.html",
     client: options.client ?? "src/entry.client.tsx",
@@ -802,30 +432,24 @@ function resolvePluginOptions(options: StupidFpViteOptions): RequiredPluginOptio
   };
 }
 
-function resolvePluginMetadata(
-  config: ResolvedConfig,
-  options: RequiredPluginOptions,
-): StupidFpViteMetadata {
-  const template = resolve(config.root, options.template);
-  const client = resolve(config.root, options.client);
-  const server = resolve(config.root, options.server);
+function resolvePluginMetadata(root: string, options: RequiredPluginOptions): StupidFpMetadata {
+  const template = resolve(root, options.template);
+  const client = resolve(root, options.client);
+  const server = resolve(root, options.server);
+  const nodeRuntimePath = resolve(dirname(fileURLToPath(import.meta.url)), "../../node.ts");
 
   return {
-    root: config.root,
+    root,
     template,
     client,
     server,
-    clientImportPath: rootImportPath(config.root, client),
-    serverImportPath: rootImportPath(config.root, server),
+    nodeRuntimePath,
+    clientImportPath: rootImportPath(root, client),
+    serverImportPath: rootImportPath(root, server),
     clientVirtualId,
     serverVirtualId,
+    nodeServerVirtualId,
   };
-}
-
-function resolvedOutDir(config: ResolvedConfig): string {
-  return isAbsolute(config.build.outDir)
-    ? config.build.outDir
-    : resolve(config.root, config.build.outDir);
 }
 
 function rootImportPath(root: string, file: string): string {
@@ -883,195 +507,13 @@ function serializeBootstrap<TProjection, TTrace>(
   return JSON.stringify(bootstrap).replaceAll("<", "\\u003c");
 }
 
-type ViteManifestEntry = {
-  file: string;
-  css?: string[];
-  imports?: string[];
-  isEntry?: boolean;
-};
-
-function resolveManifestEntry(
-  manifest: Record<string, ViteManifestEntry>,
-): ViteManifestEntry | null {
-  const entries = Object.values(manifest).filter((entry) => entry.isEntry);
-
-  if (entries.length === 1) {
-    return entries[0] ?? null;
-  }
-
-  return null;
+function htmlResponse(html: string): Response {
+  return new Response(html, {
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
 }
 
-function resolveProductionTemplatePath(
-  clientOutDir: string,
-  app: StupidFpViteMetadata,
-  manifest: Record<string, ViteManifestEntry>,
-): string {
-  const relativeTemplate = relative(app.root, app.template);
-
-  if (!relativeTemplate.startsWith("..") && !isAbsolute(relativeTemplate)) {
-    return join(clientOutDir, relativeTemplate);
-  }
-
-  const manifestTemplate = Object.keys(manifest).find((key) => key.endsWith(".html"));
-
-  if (!manifestTemplate) {
-    throw new Error("Vite client build did not produce a template HTML entry");
-  }
-
-  return join(clientOutDir, manifestTemplate);
-}
-
-function isViteAssetPath(pathname: string): boolean {
-  return (
-    pathname.startsWith("/@vite/") ||
-    pathname.startsWith("/@react-refresh") ||
-    pathname.startsWith("/@id/") ||
-    pathname.startsWith("/@fs/") ||
-    pathname.startsWith("/node_modules/") ||
-    pathname.startsWith("/src/") ||
-    pathname.includes("/demo/") ||
-    /\.[cm]?[tj]sx?$/.test(pathname) ||
-    pathname.endsWith(".css") ||
-    isStaticAssetPath(pathname)
-  );
-}
-
-function isStaticAssetPath(pathname: string): boolean {
-  return /\.(?:avif|gif|ico|jpe?g|json|png|svg|txt|webp|woff2?)$/i.test(pathname);
-}
-
-function hasUnsafePathSegment(pathname: string): boolean {
-  let decoded: string;
-
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    return true;
-  }
-
-  return decoded.includes("\0") || decoded.split("/").includes("..");
-}
-
-function injectViteProductionAssets(
-  html: string,
-  manifest: Record<string, ViteManifestEntry>,
-  entry: ViteManifestEntry,
-): string {
-  const styleFiles = new Set<string>();
-  const importedChunks = collectViteImportedChunks(manifest, entry);
-
-  for (const file of entry.css ?? []) {
-    styleFiles.add(file);
-  }
-
-  for (const imported of importedChunks) {
-    for (const file of imported.css ?? []) {
-      styleFiles.add(file);
-    }
-  }
-
-  const styles = [...styleFiles]
-    .map((file) => `<link rel="stylesheet" href="/${file}" />`)
-    .join("");
-  const script = `<script type="module" src="/${entry.file}"></script>`;
-  const modulepreloads = importedChunks
-    .map((chunk) => `<link rel="modulepreload" href="/${chunk.file}" />`)
-    .join("");
-  const tags = `${styles}${script}${modulepreloads}`;
-
-  return html.includes("</body>") ? html.replace("</body>", `${tags}</body>`) : `${html}${tags}`;
-}
-
-function collectViteImportedChunks(
-  manifest: Record<string, ViteManifestEntry>,
-  entry: ViteManifestEntry,
-): ViteManifestEntry[] {
-  const chunks: ViteManifestEntry[] = [];
-  const seen = new Set<string>();
-
-  function visit(chunk: ViteManifestEntry): void {
-    for (const imported of chunk.imports ?? []) {
-      if (seen.has(imported)) {
-        continue;
-      }
-
-      const importedEntry = manifest[imported];
-
-      if (!importedEntry) {
-        continue;
-      }
-
-      seen.add(imported);
-      visit(importedEntry);
-      chunks.push(importedEntry);
-    }
-  }
-
-  visit(entry);
-  return chunks;
-}
-
-function contentType(pathname: string): string {
-  if (pathname.endsWith(".css")) {
-    return "text/css; charset=utf-8";
-  }
-
-  if (pathname.endsWith(".js")) {
-    return "text/javascript; charset=utf-8";
-  }
-
-  if (pathname.endsWith(".svg")) {
-    return "image/svg+xml";
-  }
-
-  if (pathname.endsWith(".png")) {
-    return "image/png";
-  }
-
-  if (pathname.endsWith(".webp")) {
-    return "image/webp";
-  }
-
-  if (pathname.endsWith(".avif")) {
-    return "image/avif";
-  }
-
-  if (pathname.endsWith(".ico")) {
-    return "image/x-icon";
-  }
-
-  if (pathname.endsWith(".woff")) {
-    return "font/woff";
-  }
-
-  if (pathname.endsWith(".woff2")) {
-    return "font/woff2";
-  }
-
-  if (pathname.endsWith(".json")) {
-    return "application/json; charset=utf-8";
-  }
-
-  if (pathname.endsWith(".txt")) {
-    return "text/plain; charset=utf-8";
-  }
-
-  return "application/octet-stream";
-}
-
-async function serveViteProductionAsset(
-  clientOutDir: string,
-  request: Request,
-): Promise<Response | null> {
-  return serveViteFile(clientOutDir, request, { denyViteMetadata: true });
-}
-
-async function serveViteFile(
-  root: string,
-  request: Request,
-  options?: { denyViteMetadata?: boolean },
-): Promise<Response | null> {
+async function serveFile(root: string, request: Request): Promise<Response | null> {
   const url = new URL(request.url);
   let pathname: string;
 
@@ -1081,7 +523,7 @@ async function serveViteFile(
     return null;
   }
 
-  if (pathname.includes("\0") || (options?.denyViteMetadata && pathname.startsWith("/.vite/"))) {
+  if (pathname.includes("\0")) {
     return null;
   }
 
@@ -1103,118 +545,38 @@ async function serveViteFile(
   });
 }
 
-async function isPublicAssetRequest(publicDir: string, pathname: string): Promise<boolean> {
+function contentType(pathname: string): string {
+  if (pathname.endsWith(".svg")) {
+    return "image/svg+xml";
+  }
+
+  if (pathname.endsWith(".txt")) {
+    return "text/plain; charset=utf-8";
+  }
+
+  return "application/octet-stream";
+}
+
+function hasUnsafePathSegment(pathname: string): boolean {
   let decoded: string;
 
   try {
     decoded = decodeURIComponent(pathname);
   } catch {
-    return false;
+    return true;
   }
 
-  if (decoded.includes("\0")) {
-    return false;
-  }
-
-  const assetPath = resolve(publicDir, `.${decoded}`);
-  const routeToAsset = relative(publicDir, assetPath);
-
-  if (routeToAsset.startsWith("..") || isAbsolute(routeToAsset)) {
-    return false;
-  }
-
-  return Boolean((await stat(assetPath).catch(() => null))?.isFile());
+  return decoded.includes("\0") || decoded.split("/").includes("..");
 }
 
-function nodeRequestToRequest(request: IncomingMessage): Request {
-  return new Request(
-    request.url ? new URL(request.url, requestUrlOrigin(request)) : requestUrlOrigin(request),
-    {
-      headers: nodeHeaders(request),
-      method: request.method,
-    },
-  );
-}
-
-function nodeHeaders(request: IncomingMessage): Headers {
-  const headers = new Headers();
-
-  for (const [name, value] of Object.entries(request.headers)) {
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        headers.append(name, entry);
-      }
-      continue;
-    }
-
-    if (value !== undefined) {
-      headers.set(name, value);
-    }
-  }
-
-  return headers;
-}
-
-function requestUrlOrigin(request: IncomingMessage): string {
-  const host = request.headers.host ?? "localhost";
+function requestUrlOrigin(request: { headers: { host?: string | string[] } }): string {
+  const host = Array.isArray(request.headers.host)
+    ? (request.headers.host[0] ?? "localhost")
+    : (request.headers.host ?? "localhost");
   return `http://${host}`;
 }
 
-async function sendNodeResponse(response: ServerResponse, webResponse: Response): Promise<void> {
-  response.statusCode = webResponse.status;
-  response.statusMessage = webResponse.statusText;
-
-  webResponse.headers.forEach((value, key) => {
-    response.setHeader(key, value);
-  });
-
-  if (!webResponse.body) {
-    response.end();
-    return;
-  }
-
-  response.end(Buffer.from(new Uint8Array(await webResponse.arrayBuffer())));
-}
-
-function serveViteMiddleware(
-  middleware: Connect.Server,
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    middleware(request, response, (error?: unknown) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve(response.writableEnded);
-    });
-  });
-}
-
-function listen(
-  server: ReturnType<typeof createHttpServer>,
-  port: number,
-  hostname: string | undefined,
-): Promise<void> {
-  return new Promise((resolveListen, rejectListen) => {
-    const onError = (error: Error) => {
-      server.off("listening", onListening);
-      rejectListen(error);
-    };
-    const onListening = () => {
-      server.off("error", onError);
-      resolveListen();
-    };
-
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(port, hostname);
-  });
-}
-
-function rawSocketPayload(payload: RawData): string {
+function rawSocketPayload(payload: import("ws").RawData): string {
   if (Array.isArray(payload)) {
     return Buffer.concat(payload).toString("utf8");
   }
@@ -1222,27 +584,20 @@ function rawSocketPayload(payload: RawData): string {
   return Buffer.from(new Uint8Array(payload)).toString("utf8");
 }
 
-async function writeProductionServerEntrypoint(
-  _outDir: string,
-  _metadata: StupidFpViteMetadata,
-): Promise<void> {
-  return undefined;
-}
-
 class SocketDelivery<TProjection, TTrace> {
-  readonly #viewSockets = new Map<string, Set<WebSocket>>();
-  readonly #socketView = new WeakMap<WebSocket, string>();
+  readonly #viewSockets = new Map<string, Set<import("ws").WebSocket>>();
+  readonly #socketView = new WeakMap<import("ws").WebSocket, string>();
 
-  send(current: WebSocket, envelopes: ServerEnvelope<TProjection, TTrace>[]): void {
+  send(socket: import("ws").WebSocket, envelopes: ServerEnvelope<TProjection, TTrace>[]): void {
     for (const envelope of envelopes) {
       const target = "viewId" in envelope ? envelope.viewId : undefined;
 
       if (envelope.type === "connected") {
-        this.attach(current, envelope.viewId);
+        this.attach(socket, envelope.viewId);
       }
 
       if (!target) {
-        current.send(JSON.stringify(envelope));
+        socket.send(JSON.stringify(envelope));
         continue;
       }
 
@@ -1252,13 +607,13 @@ class SocketDelivery<TProjection, TTrace> {
         continue;
       }
 
-      for (const socket of sockets) {
-        socket.send(JSON.stringify(envelope));
+      for (const targetSocket of sockets) {
+        targetSocket.send(JSON.stringify(envelope));
       }
     }
   }
 
-  close(socket: WebSocket): void {
+  close(socket: import("ws").WebSocket): void {
     const viewId = this.#socketView.get(socket);
 
     if (!viewId) {
@@ -1276,10 +631,10 @@ class SocketDelivery<TProjection, TTrace> {
     this.#socketView.delete(socket);
   }
 
-  private attach(socket: WebSocket, viewId: string): void {
+  private attach(socket: import("ws").WebSocket, viewId: string): void {
     this.close(socket);
 
-    const sockets = this.#viewSockets.get(viewId) ?? new Set<WebSocket>();
+    const sockets = this.#viewSockets.get(viewId) ?? new Set<import("ws").WebSocket>();
     sockets.add(socket);
     this.#viewSockets.set(viewId, sockets);
     this.#socketView.set(socket, viewId);

@@ -10,7 +10,8 @@ import type { ProjectionPatchEnvelope, ServerEnvelope } from "stupid-fp-framewor
 import { TraceStore, type TraceSnapshot } from "stupid-fp-framework/trace";
 import { applyRegionValuePatchAutomatically } from "stupid-fp-framework/patch";
 import type { ProgramStreamReactOptions } from "stupid-fp-framework/react";
-import { serveViteProgram } from "stupid-fp-framework/vite";
+import { startNodeProgramServer } from "stupid-fp-framework/node";
+import { stupidFp } from "stupid-fp-framework/vite";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 
@@ -31,7 +32,8 @@ describe("modular adoption surface", () => {
       count: 1,
     });
     expect(reactOptions).toBeNull();
-    expect(typeof serveViteProgram).toBe("function");
+    expect(typeof startNodeProgramServer).toBe("function");
+    expect(typeof stupidFp).toBe("function");
     expect(packageJson.exports["./vite"]).toBe("./src/vite.ts");
     expect(packageJson.exports["./node"]).toBe("./src/node.ts");
     expect(packageJson.exports["./bun"]).toBeUndefined();
